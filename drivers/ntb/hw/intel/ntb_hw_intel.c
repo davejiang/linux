@@ -53,6 +53,7 @@
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/init.h>
+#include <linux/msi.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -155,6 +156,20 @@ MODULE_PARM_DESC(xeon_b2b_dsd_bar5_addr32,
 static inline enum ntb_topo xeon_ppd_topo(struct intel_ntb_dev *ndev, u8 ppd);
 static int xeon_init_isr(struct intel_ntb_dev *ndev);
 
+#define MSIX_VER_GUARD		0xaabbccdd
+#define MSIX_RECEIVED		0xe0f0e0f0
+enum {
+	MSIX_GUARD = 0,
+	MSIX_DATA0,
+	MSIX_DATA1,
+	MSIX_DATA2,
+	MSIX_OFS0,
+	MSIX_OFS1,
+	MSIX_OFS2,
+	MSIX_DONE,
+	MAX_HW_SPAD,
+};
+
 #ifndef ioread64
 #ifdef readq
 #define ioread64 readq
@@ -183,6 +198,8 @@ static inline void _iowrite64(u64 val, void __iomem *mmio)
 }
 #endif
 #endif
+
+#define PIDX		NTB_DEF_PEER_IDX
 
 static inline int pdev_is_atom(struct pci_dev *pdev)
 {
@@ -403,7 +420,7 @@ static inline int ndev_spad_write(struct intel_ntb_dev *ndev, int idx, u32 val,
 	return 0;
 }
 
-static irqreturn_t ndev_interrupt(struct intel_ntb_dev *ndev, int vec)
+static irqreturn_t ndev_interrupt(struct intel_ntb_dev *ndev, int irq, int vec)
 {
 	u64 vec_mask;
 
@@ -421,6 +438,13 @@ static irqreturn_t ndev_interrupt(struct intel_ntb_dev *ndev, int vec)
 			ntb_link_event(&ndev->ntb);
 	}
 
+	if ((ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) && (vec < 3)) {
+		struct intel_ntb_vec *nvec = &ndev->vec[vec];
+
+		if (!cmpxchg(&nvec->irq, 0, irq))
+			disable_irq_nosync(irq);
+	}
+
 	if (vec_mask & ndev->db_valid_mask)
 		ntb_db_event(&ndev->ntb, vec);
 
@@ -434,14 +458,14 @@ static irqreturn_t ndev_vec_isr(int irq, void *dev)
 	dev_dbg(&nvec->ndev->ntb.pdev->dev, "irq: %d  nvec->num: %d\n",
 		irq, nvec->num);
 
-	return ndev_interrupt(nvec->ndev, nvec->num);
+	return ndev_interrupt(nvec->ndev, irq, nvec->num);
 }
 
 static irqreturn_t ndev_irq_isr(int irq, void *dev)
 {
 	struct intel_ntb_dev *ndev = dev;
 
-	return ndev_interrupt(ndev, irq - ndev->ntb.pdev->irq);
+	return ndev_interrupt(ndev, irq, irq - ndev->ntb.pdev->irq);
 }
 
 static int ndev_init_isr(struct intel_ntb_dev *ndev,
@@ -493,6 +517,35 @@ static int ndev_init_isr(struct intel_ntb_dev *ndev,
 	dev_dbg(&pdev->dev, "Using %d msix interrupts\n", msix_count);
 	ndev->db_vec_count = msix_count;
 	ndev->db_vec_shift = msix_shift;
+
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		struct msi_desc *entry;
+		u32 laddr = 0;
+		u32 data = 0;
+		i = 0;
+
+		/*
+		 * acquire the interrupt region in the LAPIC for the
+		 * MSIX vectors
+		 */
+		list_for_each_entry(entry, &pdev->dev.msi_list, list) {
+			unsigned int offset = ndev->msix[i].entry *
+				PCI_MSIX_ENTRY_SIZE;
+
+			laddr = ioread32(entry->mask_base + offset +
+					 PCI_MSIX_ENTRY_LOWER_ADDR);
+			dev_dbg(&pdev->dev, "local lower MSIX addr(%d): %#x\n",
+				i, laddr);
+			ndev->msix_data[i].ofs = ~0xfee00000 & laddr;
+			data = ioread32(entry->mask_base + offset +
+					PCI_MSIX_ENTRY_DATA);
+			dev_dbg(&pdev->dev, "local MSIX data(%d): %#x\n",
+				i, data);
+			ndev->msix_data[i].data = data;
+			i++;
+		}
+	}
+
 	return 0;
 
 err_msix_request:
@@ -506,6 +559,11 @@ err_msix_alloc:
 err_msix_vec_alloc:
 	ndev->msix = NULL;
 	ndev->vec = NULL;
+
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		dev_err(&pdev->dev, "Errata workaround does not support MSI or INX\n");
+		return -EINVAL;
+	}
 
 	/* Try to set up msi irq */
 
@@ -1327,6 +1385,21 @@ static u64 intel_ntb_db_read(struct ntb_dev *ntb)
 {
 	struct intel_ntb_dev *ndev = ntb_ndev(ntb);
 
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		u64 db_bits = 0;
+		int i;
+
+		for (i = 0; i < 3; i++) {
+			struct intel_ntb_vec *nvec = &ndev->vec[i];
+
+			/* if irq disabled */
+			if (nvec->irq)
+				db_bits |= intel_ntb_db_vector_mask(ntb, i);
+		}
+
+		return db_bits;
+	}
+
 	return ndev_db_read(ndev,
 			    ndev->self_mmio +
 			    ndev->self_reg->db_bell);
@@ -1335,6 +1408,23 @@ static u64 intel_ntb_db_read(struct ntb_dev *ntb)
 static int intel_ntb_db_clear(struct ntb_dev *ntb, u64 db_bits)
 {
 	struct intel_ntb_dev *ndev = ntb_ndev(ntb);
+
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		int i;
+
+		for (i = 0; i < 3; i++) {
+			struct intel_ntb_vec *nvec = &ndev->vec[i];
+			int irq;
+
+			if (db_bits & intel_ntb_db_vector_mask(ntb, i)) {
+				irq = xchg(&nvec->irq, 0);
+				if  (irq)
+					enable_irq(irq);
+			}
+		}
+
+		return 0;
+	}
 
 	return ndev_db_write(ndev, db_bits,
 			     ndev->self_mmio +
@@ -1345,6 +1435,9 @@ static int intel_ntb_db_set_mask(struct ntb_dev *ntb, u64 db_bits)
 {
 	struct intel_ntb_dev *ndev = ntb_ndev(ntb);
 
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+		return 0;
+
 	return ndev_db_set_mask(ndev, db_bits,
 				ndev->self_mmio +
 				ndev->self_reg->db_mask);
@@ -1353,6 +1446,9 @@ static int intel_ntb_db_set_mask(struct ntb_dev *ntb, u64 db_bits)
 static int intel_ntb_db_clear_mask(struct ntb_dev *ntb, u64 db_bits)
 {
 	struct intel_ntb_dev *ndev = ntb_ndev(ntb);
+
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+		return 0;
 
 	return ndev_db_clear_mask(ndev, db_bits,
 				  ndev->self_mmio +
@@ -1373,9 +1469,21 @@ static int intel_ntb_peer_db_set(struct ntb_dev *ntb, u64 db_bits)
 {
 	struct intel_ntb_dev *ndev = ntb_ndev(ntb);
 
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		int i;
+
+		for (i = 0; i < 3; i++) {
+			if (db_bits & intel_ntb_db_vector_mask(ntb, i))
+				iowrite32(ndev->peer_msix_data[i].data,
+					  ndev->peer_lapic_mmio +
+					  ndev->peer_msix_data[i].ofs);
+		}
+
+		return 0;
+	}
+
 	return ndev_db_write(ndev, db_bits,
-			     ndev->peer_mmio +
-			     ndev->peer_reg->db_bell);
+			     ndev->peer_mmio + ndev->peer_reg->db_bell);
 }
 
 static int intel_ntb_spad_is_unsafe(struct ntb_dev *ntb)
@@ -1437,6 +1545,14 @@ static int intel_ntb_peer_spad_write(struct ntb_dev *ntb, int pidx,
 	return ndev_spad_write(ndev, sidx, val,
 			       ndev->peer_mmio +
 			       ndev->peer_reg->spad);
+}
+
+static void intel_ntb_clear_spads(struct intel_ntb_dev *ndev)
+{
+	int i;
+
+	for (i = 0; i < ndev->spad_count; i++)
+		intel_ntb_spad_write(&ndev->ntb, i, 0);
 }
 
 /* ATOM */
@@ -2086,6 +2202,19 @@ static void xeon_db_iowrite(u64 bits, void __iomem *mmio)
 	iowrite16((u16)bits, mmio);
 }
 
+static int _xeon_link_is_up(struct intel_ntb_dev *ndev)
+{
+	if (ndev->ntb.topo == NTB_TOPO_SEC)
+		return 1;
+
+	return NTB_LNK_STA_ACTIVE(ndev->lnk_sta);
+}
+
+static int xeon_link_is_up(struct intel_ntb_dev *ndev)
+{
+	return ndev->peer_msix_good & _xeon_link_is_up(ndev);
+}
+
 static int xeon_poll_link(struct intel_ntb_dev *ndev)
 {
 	u16 reg_val;
@@ -2105,15 +2234,19 @@ static int xeon_poll_link(struct intel_ntb_dev *ndev)
 
 	ndev->lnk_sta = reg_val;
 
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		if (_xeon_link_is_up(ndev)) {
+			if (!ndev->peer_msix_good) {
+				schedule_delayed_work(&ndev->peer_msix_work, 0);
+				return 0;
+			}
+		} else {
+			ndev->peer_msix_good = 0;
+			ndev->peer_msix_done = 0;
+		}
+	}
+
 	return 1;
-}
-
-static int xeon_link_is_up(struct intel_ntb_dev *ndev)
-{
-	if (ndev->ntb.topo == NTB_TOPO_SEC)
-		return 1;
-
-	return NTB_LNK_STA_ACTIVE(ndev->lnk_sta);
 }
 
 static inline enum ntb_topo xeon_ppd_topo(struct intel_ntb_dev *ndev, u8 ppd)
@@ -2157,6 +2290,38 @@ static int xeon_init_isr(struct intel_ntb_dev *ndev)
 static void xeon_deinit_isr(struct intel_ntb_dev *ndev)
 {
 	ndev_deinit_isr(ndev);
+}
+
+static int xeon_setup_msix_bar(struct intel_ntb_dev *ndev)
+{
+	phys_addr_t bar_addr;
+	resource_size_t bar_size;
+	int bar;
+
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+		/* get BAR 4 */
+		bar = ndev->reg->mw_bar[1];
+		dev_dbg(&ndev->ntb.pdev->dev, "BAR %d", bar);
+		if (bar < 0)
+			return -EIO;
+
+
+		bar_addr = pci_resource_start(ndev->ntb.pdev, bar);
+		bar_size = pci_resource_len(ndev->ntb.pdev, bar);
+		/* restrict it to 1M */
+		bar_size = (bar_size > 0x100000) ? 0x100000 : bar_size;
+
+		dev_dbg(&ndev->ntb.pdev->dev, "BAR %d", bar);
+		dev_dbg(&ndev->ntb.pdev->dev, "BAR addr: %#Lx", bar_addr);
+		dev_dbg(&ndev->ntb.pdev->dev, "BAR size: %#Lx", bar_size);
+
+		ndev->peer_lapic_mmio = ioremap_nocache(bar_addr, bar_size);
+		dev_dbg(&ndev->ntb.pdev->dev, "BAR vaddr: %p", ndev->peer_lapic_mmio);
+		if (!ndev->peer_lapic_mmio)
+			return -EIO;
+	}
+
+	return 0;
 }
 
 static int xeon_setup_b2b_mw(struct intel_ntb_dev *ndev,
@@ -2318,8 +2483,12 @@ static int xeon_setup_b2b_mw(struct intel_ntb_dev *ndev,
 		bar_addr = ioread64(mmio + XEON_SBAR45LMT_OFFSET);
 		dev_dbg(&pdev->dev, "SBAR45LMT %#018llx\n", bar_addr);
 	} else {
-		bar_addr = addr->bar4_addr32 +
-			(b2b_bar == 4 ? ndev->b2b_off : 0);
+		if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+			bar_addr = addr->bar4_addr32 + 0x100000;
+		else
+			bar_addr = addr->bar4_addr32 +
+				(b2b_bar == 4 ? ndev->b2b_off : 0);
+
 		iowrite32(bar_addr, mmio + XEON_SBAR4LMT_OFFSET);
 		bar_addr = ioread32(mmio + XEON_SBAR4LMT_OFFSET);
 		dev_dbg(&pdev->dev, "SBAR4LMT %#010llx\n", bar_addr);
@@ -2336,9 +2505,21 @@ static int xeon_setup_b2b_mw(struct intel_ntb_dev *ndev,
 
 	if (!ndev->bar4_split) {
 		iowrite64(0, mmio + XEON_SBAR45XLAT_OFFSET);
+		bar_addr = ioread64(mmio + XEON_SBAR45XLAT_OFFSET);
+		dev_dbg(&ndev->ntb.pdev->dev, "SBAR45XLT %#010llx\n", bar_addr);
 	} else {
-		iowrite32(0, mmio + XEON_SBAR4XLAT_OFFSET);
+		/* we point SBAR4XLAT to remote LAPIC region for workaround */
+		if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+			iowrite32(0xfee00000, mmio + XEON_SBAR4XLAT_OFFSET);
+		else
+			iowrite32(0, mmio + XEON_SBAR4XLAT_OFFSET);
+
+		bar_addr = ioread32(mmio + XEON_SBAR4XLAT_OFFSET);
+		dev_dbg(&ndev->ntb.pdev->dev, "SBAR4XLAT %#05llx\n", bar_addr);
+
 		iowrite32(0, mmio + XEON_SBAR5XLAT_OFFSET);
+		bar_addr = ioread32(mmio + XEON_SBAR5XLAT_OFFSET);
+		dev_dbg(&ndev->ntb.pdev->dev, "SBAR5XLAT %#05llx\n", bar_addr);
 	}
 
 	/* zero outgoing translation limits (whole bar size windows) */
@@ -2410,15 +2591,23 @@ static int xeon_init_ntb(struct intel_ntb_dev *ndev)
 	struct device *dev = &ndev->ntb.pdev->dev;
 	int rc;
 	u32 ntb_ctl;
+	void __iomem *mmio;
+	phys_addr_t bar_addr;
+	struct pci_dev *pdev = ndev->ntb.pdev;
 
-	if (ndev->bar4_split)
-		ndev->mw_count = HSX_SPLIT_BAR_MW_COUNT;
-	else
+	if (ndev->bar4_split) {
+		if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+			ndev->mw_count = HSX_ERRATA_MAX_MW_COUNT;
+		else
+			ndev->mw_count = HSX_SPLIT_BAR_MW_COUNT;
+	} else
 		ndev->mw_count = XEON_MW_COUNT;
 
 	ndev->spad_count = XEON_SPAD_COUNT;
 	ndev->db_count = XEON_DB_COUNT;
 	ndev->db_link_mask = XEON_DB_LINK_BIT;
+
+	mmio = ndev->self_mmio;
 
 	switch (ndev->ntb.topo) {
 	case NTB_TOPO_PRI:
@@ -2437,6 +2626,17 @@ static int xeon_init_ntb(struct intel_ntb_dev *ndev)
 		ndev->self_reg = &xeon_pri_reg;
 		ndev->peer_reg = &xeon_sec_reg;
 		ndev->xlat_reg = &xeon_sec_xlat;
+
+		if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+			iowrite32(0xfee00000, mmio + XEON_SBAR4XLAT_OFFSET);
+			bar_addr = ioread32(mmio + XEON_SBAR4XLAT_OFFSET);
+			dev_dbg(&ndev->ntb.pdev->dev, "SBAR4XLAT %#010llx\n", bar_addr);
+			bar_addr = pci_resource_start(pdev, 2) + 0x100000;
+			iowrite32(bar_addr, mmio + XEON_SBAR4LMT_OFFSET);
+			bar_addr = ioread32(mmio + XEON_SBAR4LMT_OFFSET);
+			dev_dbg(&ndev->ntb.pdev->dev, "SBAR4LMT %#010llx\n", bar_addr);
+		}
+
 		break;
 
 	case NTB_TOPO_SEC:
@@ -2449,6 +2649,17 @@ static int xeon_init_ntb(struct intel_ntb_dev *ndev)
 		ndev->self_reg = &xeon_sec_reg;
 		ndev->peer_reg = &xeon_pri_reg;
 		ndev->xlat_reg = &xeon_pri_xlat;
+
+		if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+			iowrite32(0xfee00000, mmio + XEON_PBAR4XLAT_OFFSET);
+			bar_addr = ioread32(mmio + XEON_PBAR4XLAT_OFFSET);
+			dev_dbg(&ndev->ntb.pdev->dev, "PBAR4XLAT %#010llx\n", bar_addr);
+			bar_addr = pci_resource_start(pdev, 2) + 0x100000;
+			iowrite32(bar_addr, mmio + XEON_SBAR4LMT_OFFSET);
+			bar_addr = ioread32(mmio + XEON_SBAR4LMT_OFFSET);
+			dev_dbg(&ndev->ntb.pdev->dev, "SBAR4LMT %#010llx\n", bar_addr);
+		}
+
 		break;
 
 	case NTB_TOPO_B2B_USD:
@@ -2502,6 +2713,10 @@ static int xeon_init_ntb(struct intel_ntb_dev *ndev)
 		return -EINVAL;
 	}
 
+	rc = xeon_setup_msix_bar(ndev);
+	if (rc < 0)
+		return rc;
+
 	ndev->db_valid_mask = BIT_ULL(ndev->db_count) - 1;
 
 	ndev->reg->db_iowrite(ndev->db_valid_mask,
@@ -2535,12 +2750,6 @@ static int xeon_init_dev(struct intel_ntb_dev *ndev)
 	case PCI_DEVICE_ID_INTEL_NTB_SS_IVT:
 	case PCI_DEVICE_ID_INTEL_NTB_PS_IVT:
 	case PCI_DEVICE_ID_INTEL_NTB_B2B_IVT:
-	case PCI_DEVICE_ID_INTEL_NTB_SS_HSX:
-	case PCI_DEVICE_ID_INTEL_NTB_PS_HSX:
-	case PCI_DEVICE_ID_INTEL_NTB_B2B_HSX:
-	case PCI_DEVICE_ID_INTEL_NTB_SS_BDX:
-	case PCI_DEVICE_ID_INTEL_NTB_PS_BDX:
-	case PCI_DEVICE_ID_INTEL_NTB_B2B_BDX:
 		ndev->hwerr_flags |= NTB_HWERR_SDOORBELL_LOCKUP;
 		break;
 	}
@@ -2559,6 +2768,7 @@ static int xeon_init_dev(struct intel_ntb_dev *ndev)
 	case PCI_DEVICE_ID_INTEL_NTB_PS_BDX:
 	case PCI_DEVICE_ID_INTEL_NTB_B2B_BDX:
 		ndev->hwerr_flags |= NTB_HWERR_SB01BASE_LOCKUP;
+		ndev->peer_msix_good = 0;
 		break;
 	}
 
@@ -2687,10 +2897,68 @@ static void intel_ntb_deinit_pci(struct intel_ntb_dev *ndev)
 		pci_iounmap(pdev, ndev->peer_mmio);
 	pci_iounmap(pdev, ndev->self_mmio);
 
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+		iounmap(ndev->peer_lapic_mmio);
+
 	pci_clear_master(pdev);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
+}
+
+static void intel_ntb_exchange_msix(struct work_struct *work)
+{
+	struct intel_ntb_dev *ndev = container_of(work,
+						  struct intel_ntb_dev,
+						  peer_msix_work.work);
+	int i;
+	u32 val;
+
+	if (!ndev->peer_msix_done) {
+		for (i = 0; i < 3; i++) {
+			intel_ntb_peer_spad_write(&ndev->ntb, PIDX,
+					MSIX_DATA0 + i,
+					ndev->msix_data[i].data);
+			intel_ntb_peer_spad_write(&ndev->ntb, PIDX,
+					MSIX_OFS0 + i,
+					(u32)ndev->msix_data[i].ofs);
+		}
+
+		intel_ntb_peer_spad_write(&ndev->ntb, PIDX, MSIX_GUARD,
+					  MSIX_VER_GUARD);
+
+		val = intel_ntb_spad_read(&ndev->ntb, MSIX_GUARD);
+
+		if (val != MSIX_VER_GUARD)
+			goto out;
+
+		for (i = 0; i < 3; i++) {
+			val = ntb_spad_read(&ndev->ntb, MSIX_DATA0 + i);
+			ndev->peer_msix_data[i].data = val;
+			val = ntb_spad_read(&ndev->ntb, MSIX_OFS0 + i);
+			ndev->peer_msix_data[i].ofs = val;
+		}
+
+		ndev->peer_msix_done = 1;
+	}
+
+	if (ndev->peer_msix_done) {
+		intel_ntb_peer_spad_write(&ndev->ntb, PIDX, MSIX_DONE,
+				MSIX_RECEIVED);
+		val = intel_ntb_spad_read(&ndev->ntb, MSIX_DONE);
+		if (val != MSIX_RECEIVED)
+			goto out;
+
+		ndev->peer_msix_good = 1;
+
+		xeon_poll_link(ndev);
+		ntb_link_event(&ndev->ntb);
+		return;
+	}
+
+out:
+	schedule_delayed_work(&ndev->peer_msix_work,
+			      msecs_to_jiffies(NTB_HW_LINK_DOWN_TIMEOUT));
 }
 
 static inline void ndev_init_struct(struct intel_ntb_dev *ndev,
@@ -2718,7 +2986,11 @@ static inline void ndev_init_struct(struct intel_ntb_dev *ndev,
 	ndev->db_link_mask = 0;
 	ndev->db_mask = 0;
 
+	ndev->peer_msix_good = 1;
+
 	spin_lock_init(&ndev->db_mask_lock);
+
+	INIT_DELAYED_WORK(&ndev->peer_msix_work, intel_ntb_exchange_msix);
 }
 
 static int intel_ntb_pci_probe(struct pci_dev *pdev,
@@ -2788,6 +3060,8 @@ static int intel_ntb_pci_probe(struct pci_dev *pdev,
 
 	ndev_reset_unsafe_flags(ndev);
 
+	intel_ntb_clear_spads(ndev);
+
 	ndev->reg->poll_link(ndev);
 
 	ndev_init_debugfs(ndev);
@@ -2797,6 +3071,14 @@ static int intel_ntb_pci_probe(struct pci_dev *pdev,
 		goto err_register;
 
 	dev_info(&pdev->dev, "NTB device registered.\n");
+
+	/*
+	 * This is a one shot deal for RP transparent side. If the
+	 * PRI side reloads driver, this will not know there has been
+	 * a link status change.
+	 */
+	if (pdev_is_xeon(pdev) && (ndev->ntb.topo == NTB_TOPO_SEC))
+		schedule_delayed_work(&ndev->peer_msix_work, 0);
 
 	return 0;
 
@@ -2818,6 +3100,7 @@ static void intel_ntb_pci_remove(struct pci_dev *pdev)
 {
 	struct intel_ntb_dev *ndev = pci_get_drvdata(pdev);
 
+	cancel_delayed_work_sync(&ndev->peer_msix_work);
 	ntb_unregister_device(&ndev->ntb);
 	ndev_deinit_debugfs(ndev);
 	if (pdev_is_atom(pdev))

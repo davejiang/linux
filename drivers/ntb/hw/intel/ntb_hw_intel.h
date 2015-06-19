@@ -143,6 +143,7 @@
 
 #define XEON_MW_COUNT			2
 #define HSX_SPLIT_BAR_MW_COUNT		3
+#define HSX_ERRATA_MAX_MW_COUNT		1
 #define XEON_DB_COUNT			15
 #define XEON_DB_LINK			15
 #define XEON_DB_LINK_BIT			BIT_ULL(XEON_DB_LINK)
@@ -294,6 +295,7 @@
 
 #define NTB_BAR_MASK_64			~(0xfull)
 #define NTB_BAR_MASK_32			~(0xfu)
+#define NTB_HW_LINK_DOWN_TIMEOUT	10
 
 struct intel_ntb_dev;
 
@@ -331,6 +333,12 @@ struct intel_b2b_addr {
 struct intel_ntb_vec {
 	struct intel_ntb_dev		*ndev;
 	int				num;
+	int				irq;
+};
+
+struct intel_ntb_msix_data {
+	u32				ofs;
+	u32				data;
 };
 
 struct intel_ntb_dev {
@@ -370,6 +378,13 @@ struct intel_ntb_dev {
 	void				__iomem *self_mmio;
 	void				__iomem *peer_mmio;
 	phys_addr_t			peer_addr;
+
+	struct intel_ntb_msix_data	peer_msix_data[4];
+	struct intel_ntb_msix_data	msix_data[4];
+	int				peer_msix_good;
+	int				peer_msix_done;
+	void				__iomem *peer_lapic_mmio;
+	struct delayed_work		peer_msix_work;
 
 	unsigned long			last_ts;
 	struct delayed_work		hb_timer;
