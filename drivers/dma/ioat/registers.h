@@ -84,6 +84,7 @@
 #define IOAT_CAP_PQ				0x00000200
 #define IOAT_CAP_DWBES				0x00002000
 #define IOAT_CAP_RAID16SS			0x00020000
+#define IOAT_CAP_DMAMC				0x00040000
 
 #define IOAT_CHANNEL_MMIO_SIZE			0x80	/* Each Channel MMIO space is this size */
 

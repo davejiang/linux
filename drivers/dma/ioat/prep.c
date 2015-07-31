@@ -747,3 +747,63 @@ ioat_prep_interrupt_lock(struct dma_chan *c, unsigned long flags)
 	return &desc->txd;
 }
 
+struct dma_async_tx_descriptor *
+ioat_prep_mcast_lock(struct dma_chan *c, dma_addr_t *dma_dest,
+		     int dest_num, dma_addr_t dma_src, size_t len,
+		     unsigned long flags)
+{
+	struct ioatdma_chan *ioat_chan = to_ioat_chan(c);
+	struct ioat_ring_ent *desc;
+	struct ioat_mcast_descriptor *hw;
+	size_t total_len = len;
+	int num_descs, i, dsts, idx;
+	dma_addr_t dst_addr[5];
+	dma_addr_t src_addr = dma_src;
+
+	if (dest_num < 1)
+		return NULL;
+
+	num_descs = ioat_xferlen_to_descs(ioat_chan, len);
+	if (num_descs && ioat_check_space_lock(ioat_chan, num_descs) == 0)
+		idx = ioat_chan->head;
+	else
+		return NULL;
+
+	for (i = 0; i < dest_num; i++)
+		dst_addr[i] = dma_dest[i];
+
+	i = 0;
+	do {
+		size_t copy = min_t(size_t, len, 1 << ioat_chan->xfercap_log);
+
+		desc = ioat_get_ring_ent(ioat_chan, idx + i);
+		hw = (struct ioat_mcast_descriptor *)desc->hw;
+
+		hw->size = copy;
+		hw->ctl = 0;
+		hw->ctl_f.op = IOAT_OP_MCAST;
+		hw->src_addr = src_addr;
+		hw->ctl_f.ndest = ndest_to_hw(dest_num);
+
+		hw->dst_addr_1 = dst_addr[0];
+
+		for (dsts = 1; dsts < dest_num; dsts++) {
+			hw->dst_addr_x[dsts] = dst_addr[dsts];
+			dst_addr[dsts] += copy;
+		}
+
+		len -= copy;
+		src_addr += copy;
+
+		dump_desc_dbg(ioat_chan, desc);
+	} while (++i < num_descs);
+
+	desc->txd.flags = flags;
+	desc->len = total_len;
+	hw->ctl_f.int_en = !!(flags & DMA_PREP_INTERRUPT);
+	hw->ctl_f.fence = !!(flags & DMA_PREP_FENCE);
+	hw->ctl_f.compl_write = 1;
+	dump_desc_dbg(ioat_chan, desc);
+
+	return &desc->txd;
+}

@@ -111,6 +111,33 @@ struct ioat_dma_descriptor {
 	uint64_t	user2;
 };
 
+struct ioat_mcast_descriptor {
+	uint32_t	size;
+	union {
+		uint32_t ctl;
+		struct {
+			unsigned int int_en:1;
+			unsigned int src_snoop_dis:1;
+			unsigned int dest_snoop_dis:1;
+			unsigned int compl_write:1;
+			unsigned int fence:1;
+			unsigned int null:1;
+			unsigned int rsvd1:2;
+			unsigned int bundle:1;
+			unsigned int rsvd2:1;
+			unsigned int hint:1;
+			unsigned int ndest:3;
+			unsigned int rsvd3:10;
+			#define IOAT_OP_MCAST 0x0a
+			unsigned int op:8;
+		} ctl_f;
+	};
+	uint64_t	src_addr;
+	uint64_t	dst_addr_1;
+	uint64_t	next;
+	uint64_t	dst_addr_x[4];
+};
+
 struct ioat_xor_descriptor {
 	uint32_t	size;
 	union {

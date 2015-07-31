@@ -1143,6 +1143,12 @@ static int ioat3_dma_probe(struct ioatdma_device *ioat_dma, int dca)
 		}
 	}
 
+	/* multicast capability */
+	if (ioat_dma->cap & IOAT_CAP_DMAMC) {
+		dma_cap_set(DMA_MCAST, dma->cap_mask);
+		dma->device_prep_dma_mcast = ioat_prep_mcast_lock;
+	}
+
 	dma->device_tx_status = ioat_tx_status;
 
 	/* starting with CB3.3 super extended descriptors are supported */
