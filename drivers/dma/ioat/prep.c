@@ -784,6 +784,7 @@ ioat_prep_mcast_lock(struct dma_chan *c, dma_addr_t *dma_dest,
 		     unsigned long flags)
 {
 	struct ioatdma_chan *ioat_chan = to_ioat_chan(c);
+	struct device *dev = to_dev(ioat_chan);
 	struct ioat_ring_ent *desc;
 	struct ioat_mcast_descriptor *hw;
 	size_t total_len = len;
@@ -793,6 +794,9 @@ ioat_prep_mcast_lock(struct dma_chan *c, dma_addr_t *dma_dest,
 
 	if (dest_num < 1)
 		return NULL;
+
+	dev_WARN_ONCE(dev, dest_num > 2,
+		  "IOAT DMA multicast destination > 2, HW erratum limitation");
 
 	num_descs = ioat_xferlen_to_descs(ioat_chan, len);
 	if (num_descs && ioat_check_space_lock(ioat_chan, num_descs) == 0)
