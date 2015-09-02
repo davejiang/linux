@@ -75,6 +75,9 @@ enum dma_transaction_type {
 	DMA_CYCLIC,
 	DMA_INTERLEAVE,
 	DMA_MCAST,
+	DMA_DIF_INSERT,
+	DMA_DIF_STRIP,
+	DMA_DIF_UPDATE,
 /* last transaction type for creation of the capabilities mask */
 	DMA_TX_TYPE_END,
 };
@@ -187,6 +190,7 @@ struct dma_interleaved_template {
  *  on the result of this operation
  * @DMA_CTRL_REUSE: client can reuse the descriptor and submit again till
  *  cleared or freed
+ * @DMA_PREP_DEST_DISABLE - prevent DMA copy to destination
  */
 enum dma_ctrl_flags {
 	DMA_PREP_INTERRUPT = (1 << 0),
@@ -196,6 +200,22 @@ enum dma_ctrl_flags {
 	DMA_PREP_CONTINUE = (1 << 4),
 	DMA_PREP_FENCE = (1 << 5),
 	DMA_CTRL_REUSE = (1 << 6),
+	DMA_PREP_DEST_DISABLE = (1 << 7),
+};
+
+enum dma_dif_ctrl_flags {
+	DMA_PREP_DIFS_DETECT_ERR = (1 << 0),
+	DMA_PREP_DIFS_IGNORE_DIF = (1 << 1),
+	DMA_PREP_DIFS_IGNORE_GRTAG = (1 << 2),
+	DMA_PREP_DIFS_IGNORE_GTAG = (1 << 3),
+	DMA_PREP_DIFS_APP_TAG_INC = (1 << 4),
+	DMA_PREP_DIFS_GUARD_DIS = (1 << 5),
+	DMA_PREP_DIFS_REF_TAG_DIS = (1 << 6),
+	DMA_PREP_DIFS_REF_TAG_FIXED = (1 << 7),
+	DMA_PREP_DIFD_APP_TAG_INC = ( 1 << 20),
+	DMA_PREP_DIFD_GUARD_DIS = (1 << 21),
+	DMA_PREP_DIFD_REF_TAG_DIS = (1 << 22),
+	DMA_PREP_DIFD_REF_TAG_FIXED = (1 << 23),
 };
 
 /**
@@ -204,16 +224,28 @@ enum dma_ctrl_flags {
 enum sum_check_bits {
 	SUM_CHECK_P = 0,
 	SUM_CHECK_Q = 1,
+	DIF_CHECK_GUARD = 2,
+	DIF_CHECK_APP = 3,
+	DIF_CHECK_REF = 4,
+	DIF_CHECK_FTAG = 5,
 };
 
 /**
  * enum pq_check_flags - result of async_{xor,pq}_zero_sum operations
  * @SUM_CHECK_P_RESULT - 1 if xor zero sum error, 0 otherwise
  * @SUM_CHECK_Q_RESULT - 1 if reed-solomon zero sum error, 0 otherwise
+ * @DIF_CHECK_GUARD_RESULT - 1 if DIF guard tag error, 0 otherwise
+ * @DIF_CHECK_APP_RESULT - 1 if DIF app tag error, 0 otherwise
+ * @DIF_CHECK_REF_RESULT - 1 if DIF ref tag error, 0 otherwise
+ * @DIF_CHECK_FTAG_RESULT - 1 if all F's in tag detected, 0 otherwise
  */
 enum sum_check_flags {
 	SUM_CHECK_P_RESULT = (1 << SUM_CHECK_P),
 	SUM_CHECK_Q_RESULT = (1 << SUM_CHECK_Q),
+	DIF_CHECK_GUARD_RESULT = (1 << DIF_CHECK_GUARD),
+	DIF_CHECK_APP_RESULT = (1 << DIF_CHECK_APP),
+	DIF_CHECK_REF_RESULT = (1 << DIF_CHECK_REF),
+	DIF_CHECK_FTAG_RESULT = (1 << DIF_CHECK_FTAG),
 };
 
 
@@ -696,6 +728,9 @@ struct dma_filter {
  * @device_prep_dma_memset_sg: prepares a memset operation over a scatter list
  * @device_prep_dma_interrupt: prepares an end of chain interrupt operation
  * @device_prep_dma_mcast: prepares a multi-cast operation
+ * @device_prep_dma_dif_insert: prepares a DIF insert operation
+ * @device_prep_dma_dif_strip: prepares a DIF strip operation
+ * @device_prep_dma_dif_update: prepares a DIF update operation
  * @device_prep_slave_sg: prepares a slave dma operation
  * @device_prep_dma_cyclic: prepare a cyclic dma operation suitable for audio.
  *	The function takes a buffer of size buf_len. The callback function will
@@ -781,6 +816,24 @@ struct dma_device {
 	struct dma_async_tx_descriptor *(*device_prep_dma_mcast)(
 		struct dma_chan *chan, dma_addr_t *dest, int dest_num,
 		dma_addr_t src, size_t len, unsigned long flags);
+	struct dma_async_tx_descriptor *(*device_prep_dma_dif_insert)(
+		struct dma_chan *chan, sector_t blk_sz, dma_addr_t dma_src,
+		dma_addr_t dma_dest, size_t len,
+		u16 app_tag_seed, u32 ref_tag_seed,
+		unsigned long cflags, unsigned long flags);
+	struct dma_async_tx_descriptor *(*device_prep_dma_dif_strip)(
+		struct dma_chan *chan, sector_t blk_sz, dma_addr_t dma_src,
+		dma_addr_t dma_dest, size_t len,
+		u16 app_tag_seed, u32 ref_tag_seed,
+		enum sum_check_flags *result,
+		unsigned long cflags, unsigned long flags);
+	struct dma_async_tx_descriptor *(*device_prep_dma_dif_update)(
+		struct dma_chan *chan, sector_t blk_sz, dma_addr_t dma_src,
+		dma_addr_t dma_dest, size_t len,
+		u16 src_app_tag_seed, u32 src_ref_tag_seed,
+		u16 dst_app_tag_seed, u32 dst_ref_tag_seed,
+		enum sum_check_flags *result,
+		unsigned long cflags, unsigned long flags);
 
 	struct dma_async_tx_descriptor *(*device_prep_slave_sg)(
 		struct dma_chan *chan, struct scatterlist *sgl,

@@ -172,6 +172,9 @@ struct ioat_sed_ent {
  * @pq_ex: hardware pq extension descriptor
  * @pqu: hardware pq update descriptor
  * @raw: hardware raw (un-typed) descriptor
+ * @difg: hardware DIF generate descriptor
+ * @difu: hardware DIF update descriptor
+ * @difs: hardware DIF strip descriptor
  * @txd: the generic software descriptor for all engines
  * @len: total transaction length for unmap
  * @result: asynchronous result of validate operations
@@ -189,6 +192,9 @@ struct ioat_ring_ent {
 		struct ioat_pq_update_descriptor *pqu;
 		struct ioat_mcast_descriptor *mcast;
 		struct ioat_raw_descriptor *raw;
+		struct ioat_dif_gen_descriptor *difg;
+		struct ioat_dif_strip_descriptor *difs;
+		struct ioat_dif_update_descriptor *difu;
 	};
 	size_t len;
 	struct dma_async_tx_descriptor txd;
@@ -395,6 +401,24 @@ struct dma_async_tx_descriptor *
 ioat_prep_mcast_lock(struct dma_chan *c, dma_addr_t *dma_dest,
 		     int dest_num, dma_addr_t dma_src, size_t len,
 		     unsigned long flags);
+struct dma_async_tx_descriptor *
+ioat_prep_dif_gen_lock(struct dma_chan *c, sector_t blk_sz, dma_addr_t dma_src,
+		       dma_addr_t dma_dest, size_t len,
+		       u16 app_tag_seed, u32 ref_tag_seed,
+		       unsigned long cflags, unsigned long flags);
+struct dma_async_tx_descriptor *
+ioat_prep_dif_strip_lock(struct dma_chan *c, sector_t blk_sz,
+			 dma_addr_t dma_src, dma_addr_t dma_dest, size_t len,
+			 u16 app_tag_seed, u32 ref_tag_seed,
+			 enum sum_check_flags *result,
+			 unsigned long cflags, unsigned long flags);
+struct dma_async_tx_descriptor *
+ioat_prep_dif_update_lock(struct dma_chan *c, sector_t blk_sz,
+			  dma_addr_t dma_src, dma_addr_t dma_dest, size_t len,
+			  u16 src_app_tag_seed, u32 src_ref_tag_seed,
+			  u16 dst_app_tag_seed, u32 dst_ref_tag_seed,
+			  enum sum_check_flags *result,
+			  unsigned long cflags, unsigned long flags);
 
 /* IOAT Operation functions */
 irqreturn_t ioat_dma_do_interrupt(int irq, void *data);

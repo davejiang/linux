@@ -304,4 +304,141 @@ struct ioat_sed_raw_descriptor {
 	uint64_t	c[8];
 };
 
+struct ioat_dif_ddc {
+	uint8_t rsvd5:4;
+	uint8_t atag_type:1;
+	uint8_t guard_dis:1;
+	uint8_t rtag_dis:1;
+	uint8_t rtag_type:1;
+};
+
+struct ioat_dif_sdc {
+	uint8_t tag_f_err_en:1;
+	uint8_t tag_f_en:1;
+	uint8_t app_tag_f_en:1;
+	uint8_t app_ref_tag_f_en:1;
+	uint8_t atag_type:1;
+	uint8_t guard_dis:1;
+	uint8_t rtag_dis:1;
+	uint8_t rtag_type:1;
+};
+
+struct ioat_dif_tagc {
+	u32 ref_tag_seed;
+	u16 app_mask;
+	u16 app_tag;
+};
+
+struct ioat_dif_gen_descriptor {
+	uint32_t		size;
+	union {
+		uint32_t ctl;
+		struct {
+			unsigned int int_en:1;
+			unsigned int src_snoop_dis:1;
+			unsigned int dest_snoop_dis:1;
+			unsigned int compl_write:1;
+			unsigned int fence:1;
+			unsigned int rsvd1:3;
+			unsigned int bundle:1;
+			unsigned int rsvd2:4;
+			unsigned int dblk_sz:2;
+			unsigned int rsvd3:9;
+			#define IOAT_OP_DIF_IN 0x2
+			unsigned int op:8;
+		} ctl_f;
+	};
+	uint64_t		src_addr;
+	uint64_t		dst_addr;
+	uint64_t		next;
+	uint8_t			rsvd4[7];
+	union {
+		uint8_t ddc;
+		struct ioat_dif_ddc ddc_f;
+	};
+	uint64_t		rsvd7[2];
+	struct ioat_dif_tagc	dst_tagc;
+};
+
+struct ioat_dif_strip_descriptor {
+	union {
+		uint32_t	size;
+		uint32_t	dwbe_sts;
+		struct {
+			unsigned int rsvd0:27;
+			unsigned int f_tag_err:1;
+			unsigned int chk_ref_err:1;
+			unsigned int chk_app_err:1;
+			unsigned int chk_guard_err:1;
+			unsigned int wbes:1;
+		} dwbes_f;
+	};
+	union {
+		uint32_t ctl;
+	struct {
+			unsigned int int_en:1;
+			unsigned int src_snoop_dis:1;
+			unsigned int dest_snoop_dis:1;
+			unsigned int compl_write:1;
+			unsigned int fence:1;
+			unsigned int rsvd1:2;
+			unsigned int dst_cpy_dis:1;
+			unsigned int bundle:1;
+			unsigned int rsvd2:4;
+			unsigned int dblk_sz:2;
+			unsigned int wb_en:1;
+			unsigned int rsvd3:8;
+			#define IOAT_OP_DIF_ST 0x3
+			unsigned int op:8;
+		} ctl_f;
+	};
+	uint64_t		src_addr;
+	uint64_t		dst_addr;
+	uint64_t		next;
+	union {
+		uint8_t sdc;
+		struct ioat_dif_sdc sdc_f;
+	};
+	uint8_t			rsvd4[7];
+	uint64_t		rsvd7;
+	struct ioat_dif_tagc	src_tagc;
+	uint64_t		rsvd8;
+};
+
+struct ioat_dif_update_descriptor {
+	uint32_t		size;
+	union {
+		uint32_t ctl;
+		struct {
+			unsigned int int_en:1;
+			unsigned int src_snoop_dis:1;
+			unsigned int dest_snoop_dis:1;
+			unsigned int compl_write:1;
+			unsigned int fence:1;
+			unsigned int rsvd1:3;
+			unsigned int bundle:1;
+			unsigned int rsvd2:4;
+			unsigned int dblk_sz:2;
+			unsigned int rsvd3:9;
+			#define IOAT_OP_DIF_UP 0x4
+			unsigned int op:8;
+		} ctl_f;
+	};
+	uint64_t		src_addr;
+	uint64_t		dst_addr;
+	uint64_t		next;
+	union {
+		uint8_t sdc;
+		struct ioat_dif_sdc sdc_f;
+	};
+	uint8_t			rsvd4[6];
+	union {
+		uint8_t ddc;
+		struct ioat_dif_ddc ddc_f;
+	};
+	uint64_t		rsvd7;
+	struct ioat_dif_tagc	src_tagc;
+	struct ioat_dif_tagc	dst_tagc;
+};
+
 #endif

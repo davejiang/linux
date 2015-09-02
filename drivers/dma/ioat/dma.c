@@ -563,6 +563,27 @@ desc_get_errstat(struct ioatdma_chan *ioat_chan, struct ioat_ring_ent *desc)
 
 		return;
 	}
+	case IOAT_OP_DIF_ST:
+	{
+		struct ioat_dif_strip_descriptor *dif = desc->difs;
+
+		if (!dif->dwbes_f.wbes)
+			return;
+
+		if (dif->dwbes_f.chk_guard_err)
+			*desc->result |= DIF_CHECK_GUARD_RESULT;
+
+		if (dif->dwbes_f.chk_app_err)
+			*desc->result |= DIF_CHECK_APP_RESULT;
+
+		if (dif->dwbes_f.chk_ref_err)
+			*desc->result |= DIF_CHECK_REF_RESULT;
+
+		if (dif->dwbes_f.f_tag_err)
+			*desc->result |= DIF_CHECK_FTAG_RESULT;
+
+		return;
+	}
 	default:
 		return;
 	}
@@ -790,6 +811,28 @@ static void ioat_eh(struct ioatdma_chan *ioat_chan)
 		if (chanerr & IOAT_CHANERR_XOR_Q_ERR) {
 			*desc->result |= SUM_CHECK_Q_RESULT;
 			err_handled |= IOAT_CHANERR_XOR_Q_ERR;
+		}
+		break;
+	case IOAT_OP_DIF_ST:
+	case IOAT_OP_DIF_UP:
+		if (chanerr & IOAT_CHANERR_DIF_RES_ALL_F_ERR) {
+			*desc->result |= DIF_CHECK_FTAG_RESULT;
+			err_handled |= IOAT_CHANERR_DIF_RES_ALL_F_ERR;
+		}
+
+		if (chanerr & IOAT_CHANERR_DIF_RES_GUARD_TAG_ERR) {
+			*desc->result |= DIF_CHECK_GUARD_RESULT;
+			err_handled |= IOAT_CHANERR_DIF_RES_GUARD_TAG_ERR;
+		}
+
+		if (chanerr & IOAT_CHANERR_DIF_RES_APP_TAG_ERR) {
+			*desc->result |= DIF_CHECK_APP_RESULT;
+			err_handled |= IOAT_CHANERR_DIF_RES_APP_TAG_ERR;
+		}
+
+		if (chanerr & IOAT_CHANERR_DIF_RES_REF_TAG_ERR) {
+			*desc->result |= DIF_CHECK_REF_RESULT;
+			err_handled |= IOAT_CHANERR_DIF_RES_REF_TAG_ERR;
 		}
 		break;
 	}

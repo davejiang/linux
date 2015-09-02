@@ -1149,6 +1149,16 @@ static int ioat3_dma_probe(struct ioatdma_device *ioat_dma, int dca)
 		dma->device_prep_dma_mcast = ioat_prep_mcast_lock;
 	}
 
+	/* DIF support */
+	if (ioat_dma->cap & IOAT_CAP_DIF) {
+		dma_cap_set(DMA_DIF_INSERT, dma->cap_mask);
+		dma_cap_set(DMA_DIF_STRIP, dma->cap_mask);
+		dma_cap_set(DMA_DIF_UPDATE, dma->cap_mask);
+		dma->device_prep_dma_dif_insert = ioat_prep_dif_gen_lock;
+		dma->device_prep_dma_dif_strip = ioat_prep_dif_strip_lock;
+		dma->device_prep_dma_dif_update = ioat_prep_dif_update_lock;
+	}
+
 	dma->device_tx_status = ioat_tx_status;
 
 	/* starting with CB3.3 super extended descriptors are supported */
