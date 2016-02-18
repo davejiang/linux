@@ -2911,8 +2911,9 @@ static void intel_ntb_exchange_msix(struct work_struct *work)
 	struct intel_ntb_dev *ndev = container_of(work,
 						  struct intel_ntb_dev,
 						  peer_msix_work.work);
-	int i;
+	int i, rc;
 	u32 val;
+	u16 reg_val;
 
 	if (!ndev->peer_msix_done) {
 		for (i = 0; i < 3; i++) {
@@ -2957,6 +2958,14 @@ static void intel_ntb_exchange_msix(struct work_struct *work)
 	}
 
 out:
+	rc = pci_read_config_word(ndev->ntb.pdev,
+				  XEON_LINK_STATUS_OFFSET, &reg_val);
+	if (rc || (reg_val != ndev->lnk_sta)) {
+		ndev->lnk_sta = reg_val;
+		intel_ntb_clear_spads(ndev);
+		return;
+	}
+
 	schedule_delayed_work(&ndev->peer_msix_work,
 			      msecs_to_jiffies(NTB_HW_LINK_DOWN_TIMEOUT));
 }
