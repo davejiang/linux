@@ -474,6 +474,7 @@ static int ndev_init_isr(struct intel_ntb_dev *ndev,
 {
 	struct pci_dev *pdev;
 	int rc, i, msix_count, node;
+	unsigned long irq_flags = 0;
 
 	pdev = ndev->ntb.pdev;
 
@@ -505,11 +506,14 @@ static int ndev_init_isr(struct intel_ntb_dev *ndev,
 	if (msix_count < 0)
 		goto err_msix_enable;
 
+	if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP)
+		irq_flags |= IRQF_NOBALANCING;
+
 	for (i = 0; i < msix_count; ++i) {
 		ndev->vec[i].ndev = ndev;
 		ndev->vec[i].num = i;
-		rc = request_irq(ndev->msix[i].vector, ndev_vec_isr, 0,
-				 "ndev_vec_isr", &ndev->vec[i]);
+		rc = request_irq(ndev->msix[i].vector, ndev_vec_isr,
+				 irq_flags, "ndev_vec_isr", &ndev->vec[i]);
 		if (rc)
 			goto err_msix_request;
 	}
@@ -571,7 +575,7 @@ err_msix_vec_alloc:
 	if (rc)
 		goto err_msi_enable;
 
-	rc = request_irq(pdev->irq, ndev_irq_isr, 0,
+	rc = request_irq(pdev->irq, ndev_irq_isr, irq_flags,
 			 "ndev_irq_isr", ndev);
 	if (rc)
 		goto err_msi_request;
@@ -589,7 +593,7 @@ err_msi_enable:
 
 	pci_intx(pdev, 1);
 
-	rc = request_irq(pdev->irq, ndev_irq_isr, IRQF_SHARED,
+	rc = request_irq(pdev->irq, ndev_irq_isr, irq_flags | IRQF_SHARED,
 			 "ndev_irq_isr", ndev);
 	if (rc)
 		goto err_intx_request;
