@@ -1149,6 +1149,10 @@ static int ioat3_dma_probe(struct ioatdma_device *ioat_dma, int dca)
 		dma->device_prep_dma_mcast = ioat_prep_mcast_lock;
 	}
 
+	/* disable DIF on SKX, broken */
+	if (is_skx_ioat(pdev))
+		ioat_dma->cap &= ~IOAT_CAP_DIF;
+
 	/* DIF support */
 	if (ioat_dma->cap & IOAT_CAP_DIF) {
 		dma_cap_set(DMA_DIF_INSERT, dma->cap_mask);
