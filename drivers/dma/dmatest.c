@@ -621,6 +621,11 @@ static int dmatest_func(void *data)
 		src_cnt = dst_cnt = 1;
 		buf_size = params->buf_size + (params->buf_size /
 					       params->dif_blk_sz) * 8;
+	} else if (thread->type == DMA_MCAST) {
+		align = dev->copy_align;
+		src_cnt = 1;
+		dst_cnt = 2;
+		buf_size = params->buf_size;
 	} else
 		goto err_thread_type;
 
@@ -873,6 +878,17 @@ static int dmatest_func(void *data)
 							     0,
 							     flags);
 		}
+		else if (thread->type == DMA_MCAST) {
+			dma_addr_t dma_mcast[dst_cnt];
+			for (i = 0; i < dst_cnt; i++)
+				dma_mcast[i] = dsts[i] + dst_off;
+			tx = dev->device_prep_dma_mcast(chan,
+							dma_mcast,
+							2,
+							srcs[0],
+							data_len,
+							flags);
+		}
 
 		if (!tx) {
 			dmaengine_unmap_put(um);
@@ -1084,6 +1100,8 @@ static int dmatest_add_threads(struct dmatest_info *info,
 		op = "dif_strip";
 	else if (type == DMA_DIF_UPDATE)
 		op = "dif_update";
+	else if (type == DMA_MCAST)
+		op = "mcast";
 	else
 		return -EINVAL;
 
@@ -1167,6 +1185,12 @@ static int dmatest_add_channel(struct dmatest_info *info,
 		cnt = dmatest_add_threads(info, dtc, DMA_DIF_UPDATE);
 		thread_count += cnt > 0 ? cnt : 0;
 	}
+	if (dma_has_cap(DMA_MCAST, dma_dev->cap_mask)) {
+		if (dmatest == 0) {
+			cnt = dmatest_add_threads(info, dtc, DMA_MCAST);
+			thread_count += cnt > 0 ? cnt : 0;
+		}
+	}
 
 	pr_info("Started %u threads using %s\n",
 		thread_count, dma_chan_name(chan));
@@ -1240,6 +1264,7 @@ static void run_threaded_test(struct dmatest_info *info)
 	request_channels(info, DMA_DIF_INSERT);
 	request_channels(info, DMA_DIF_STRIP);
 	request_channels(info, DMA_DIF_UPDATE);
+	request_channels(info, DMA_MCAST);
 }
 
 static void stop_threaded_test(struct dmatest_info *info)
