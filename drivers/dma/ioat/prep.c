@@ -821,6 +821,7 @@ ioat_prep_mcast_lock(struct dma_chan *c, dma_addr_t *dma_dest,
 		hw->ctl_f.ndest = ndest_to_hw(dest_num);
 
 		hw->dst_addr_1 = dst_addr[0];
+		dst_addr[0] += copy;
 
 		for (dsts = 1; dsts < dest_num; dsts++) {
 			hw->dst_addr_x[dsts] = dst_addr[dsts];
