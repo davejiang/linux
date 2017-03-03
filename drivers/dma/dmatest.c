@@ -22,6 +22,8 @@
 #include <linux/random.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
+#include <linux/crc-t10dif.h>
+#include <asm/unaligned.h>
 
 static unsigned int test_buf_size = 16384;
 module_param(test_buf_size, uint, S_IRUGO | S_IWUSR);
@@ -85,6 +87,18 @@ static bool verbose;
 module_param(verbose, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(verbose, "Enable \"success\" result messages (default: off)");
 
+static unsigned int dif_blk_sz = 512;
+module_param(dif_blk_sz, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(dif_blk_sz, "Size of blocks in bytes for DIF operations (default: 512)");
+
+static unsigned int dif_app_tag = 0x1234;
+module_param(dif_app_tag, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(dif_app_tag, "Application tag seed for DIF operations (default: 0x1234)");
+
+static unsigned int dif_ref_tag = 0x56789ABC;
+module_param(dif_ref_tag, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(dif_ref_tag, "Reference tag seed for DIF operations (default: 0x56789ABC)");
+
 /**
  * struct dmatest_params - test parameters.
  * @buf_size:		size of the memcpy test buffer
@@ -96,6 +110,9 @@ MODULE_PARM_DESC(verbose, "Enable \"success\" result messages (default: off)");
  * @xor_sources:	number of xor source buffers
  * @pq_sources:		number of p+q source buffers
  * @timeout:		transfer timeout in msec, -1 for infinite timeout
+ * @dif_blk_sz:		size of blocks for DIF operations
+ * @dif_app_tag:	application tag seed for DIF operations
+ * @dif_ref_tag:	reference tag seed for DIF operations
  */
 struct dmatest_params {
 	unsigned int	buf_size;
@@ -108,6 +125,9 @@ struct dmatest_params {
 	unsigned int	pq_sources;
 	int		timeout;
 	bool		noverify;
+	unsigned int	dif_blk_sz;
+	u16		dif_app_tag;
+	u32		dif_ref_tag;
 };
 
 /**
@@ -257,6 +277,44 @@ static void dmatest_init_srcs(u8 **bufs, unsigned int start, unsigned int len,
 	}
 }
 
+static void dmatest_init_dif_srcs(u8 **bufs, unsigned int start,
+		unsigned int len, unsigned int buf_size,
+		unsigned int block_size, u16 app_tag, u32 ref_tag)
+{
+	unsigned int i, j, b;
+	unsigned num_blocks, block_offset, dif_offset;
+	u8 *buf;
+	u16 crc;
+
+	num_blocks = len / (block_size + 8);
+
+	for (; (buf = *bufs); bufs++) {
+		for (i = 0; i < start; i++)
+			buf[i] = PATTERN_SRC | (~i & PATTERN_COUNT_MASK);
+
+		for (b = 0; b < num_blocks; b++) {
+			block_offset = start + b * (block_size + 8);
+			for (j = 0; j < block_size; i++, j++)
+				buf[block_offset + j] = PATTERN_SRC | PATTERN_COPY
+						      | (~i & PATTERN_COUNT_MASK);
+
+			dif_offset = block_offset + block_size;
+
+			crc = crc_t10dif(&buf[block_offset], block_size);
+
+			put_unaligned_be16(crc, &buf[dif_offset]);
+			put_unaligned_be16(app_tag, &buf[dif_offset + 2]);
+			put_unaligned_be32(ref_tag, &buf[dif_offset + 4]);
+
+			ref_tag++;
+		}
+
+		for (j = i + num_blocks * 8; j < buf_size; i++, j++)
+			buf[j] = PATTERN_SRC | (~i & PATTERN_COUNT_MASK);
+		buf++;
+	}
+}
+
 static void dmatest_init_dsts(u8 **bufs, unsigned int start, unsigned int len,
 		unsigned int buf_size)
 {
@@ -320,6 +378,84 @@ static unsigned int dmatest_verify(u8 **bufs, unsigned int start,
 			}
 			counter++;
 		}
+	}
+
+	if (error_count > MAX_ERROR_COUNT)
+		pr_warn("%s: %u errors suppressed\n",
+			current->comm, error_count - MAX_ERROR_COUNT);
+
+	return error_count;
+}
+
+static void dmatest_dif_mismatch(const char *field_name, unsigned int actual, unsigned int expected,
+		unsigned int index, bool is_srcbuf)
+{
+	const char *thread_name = current->comm;
+
+	pr_warn("%s: %s block 0x%x %s mismatch! Expected %x, got %x\n",
+		thread_name, is_srcbuf ? "src" : "dst", index, field_name, expected, actual);
+}
+
+static unsigned int dmatest_dif_verify(u8 *buf, unsigned int blk_sz,
+				       unsigned int start, unsigned int end,
+				       unsigned int counter, u8 pattern,
+				       bool is_srcbuf,
+				       u16 expected_app_tag, u32 expected_ref_tag)
+{
+	unsigned int b, i;
+	unsigned int error_count = 0;
+	u8 actual;
+	u8 expected;
+	unsigned int num_blocks;
+	unsigned int block_offset, dif_offset;
+	u16 expected_crc;
+	u16 buf_crc;
+	u16 buf_app_tag;
+	u32 buf_ref_tag;
+
+	num_blocks = (end - start) / (blk_sz + 8);
+
+	for (b = 0; b < num_blocks; b++) {
+		block_offset = start + b * (blk_sz + 8);
+		for (i = 0; i < blk_sz; i++) {
+			actual = buf[block_offset + i];
+			expected = pattern | (~counter & PATTERN_COUNT_MASK);
+			if (actual != expected) {
+				if (error_count < MAX_ERROR_COUNT)
+					dmatest_mismatch(actual, pattern,
+							 block_offset + i,
+							 counter, is_srcbuf);
+				error_count++;
+			}
+			counter++;
+		}
+
+		dif_offset = block_offset + blk_sz;
+		buf_crc = get_unaligned_be16(&buf[dif_offset]);
+		buf_app_tag = get_unaligned_be16(&buf[dif_offset + 2]);
+		buf_ref_tag = get_unaligned_be32(&buf[dif_offset + 4]);
+
+		expected_crc = crc_t10dif(&buf[block_offset], blk_sz);
+		if (buf_crc != expected_crc) {
+			if (error_count < MAX_ERROR_COUNT)
+				dmatest_dif_mismatch("CRC", buf_crc, expected_crc,
+						     b, is_srcbuf);
+			error_count++;
+		}
+		if (buf_app_tag != expected_app_tag) {
+			if (error_count < MAX_ERROR_COUNT)
+				dmatest_dif_mismatch("app tag", buf_app_tag, expected_app_tag,
+						     b, is_srcbuf);
+			error_count++;
+		}
+		if (buf_ref_tag != expected_ref_tag) {
+			if (error_count < MAX_ERROR_COUNT)
+				dmatest_dif_mismatch("ref tag", buf_ref_tag, expected_ref_tag,
+						     b, is_srcbuf);
+			error_count++;
+		}
+
+		expected_ref_tag++;
 	}
 
 	if (error_count > MAX_ERROR_COUNT)
@@ -418,24 +554,27 @@ static int dmatest_func(void *data)
 	struct dmatest_params	*params;
 	struct dma_chan		*chan;
 	struct dma_device	*dev;
-	unsigned int		error_count;
+	unsigned int		src_len, dst_len;
+	unsigned int		data_len;
+	unsigned int		error_count = 0;
 	unsigned int		failed_tests = 0;
 	unsigned int		total_tests = 0;
 	dma_cookie_t		cookie;
 	enum dma_status		status;
-	enum dma_ctrl_flags 	flags;
+	enum dma_ctrl_flags	flags;
 	u8			*pq_coefs = NULL;
 	int			ret;
 	int			src_cnt;
 	int			dst_cnt;
+	int			buf_size;
 	int			i;
 	ktime_t			ktime, start, diff;
 	ktime_t			filltime = 0;
 	ktime_t			comparetime = 0;
 	s64			runtime = 0;
 	unsigned long long	total_len = 0;
-	u8			align = 0;
-
+	enum sum_check_flags	difres = 0;
+	u8 align=0;
 	set_freezable();
 
 	ret = -ENOMEM;
@@ -445,29 +584,43 @@ static int dmatest_func(void *data)
 	params = &info->params;
 	chan = thread->chan;
 	dev = chan->device;
+
 	if (thread->type == DMA_MEMCPY) {
 		align = dev->copy_align;
 		src_cnt = dst_cnt = 1;
-	} else if (thread->type == DMA_SG) {
+		buf_size = params->buf_size;
+	} else if (thread->type == DMA_SG){
 		align = dev->copy_align;
 		src_cnt = dst_cnt = sg_buffers;
+		buf_size = params->buf_size;
 	} else if (thread->type == DMA_XOR) {
 		/* force odd to ensure dst = src */
 		src_cnt = min_odd(params->xor_sources | 1, dev->max_xor);
 		dst_cnt = 1;
+		buf_size = params->buf_size;
 		align = dev->xor_align;
 	} else if (thread->type == DMA_PQ) {
 		/* force odd to ensure dst = src */
 		src_cnt = min_odd(params->pq_sources | 1, dma_maxpq(dev, 0));
 		dst_cnt = 2;
+		buf_size = params->buf_size;
 		align = dev->pq_align;
-
-		pq_coefs = kmalloc(params->pq_sources + 1, GFP_KERNEL);
+		pq_coefs = kmalloc(params->pq_sources+1, GFP_KERNEL);
 		if (!pq_coefs)
 			goto err_thread_type;
 
 		for (i = 0; i < src_cnt; i++)
 			pq_coefs[i] = 1;
+	} else if (thread->type == DMA_DIF_INSERT ||
+		   thread->type == DMA_DIF_STRIP ||
+		   thread->type == DMA_DIF_UPDATE) {
+		if (params->buf_size < params->dif_blk_sz) {
+			pr_err("test_buf_size must be >= dif_blk_sz\n");
+			goto err_thread_type;
+		}
+		src_cnt = dst_cnt = 1;
+		buf_size = params->buf_size + (params->buf_size /
+					       params->dif_blk_sz) * 8;
 	} else
 		goto err_thread_type;
 
@@ -480,7 +633,7 @@ static int dmatest_func(void *data)
 		goto err_usrcs;
 
 	for (i = 0; i < src_cnt; i++) {
-		thread->usrcs[i] = kmalloc(params->buf_size + align,
+		thread->usrcs[i] = kmalloc(buf_size + align,
 					   GFP_KERNEL);
 		if (!thread->usrcs[i])
 			goto err_srcbuf;
@@ -502,7 +655,7 @@ static int dmatest_func(void *data)
 		goto err_udsts;
 
 	for (i = 0; i < dst_cnt; i++) {
-		thread->udsts[i] = kmalloc(params->buf_size + align,
+		thread->udsts[i] = kmalloc(buf_size + align,
 					   GFP_KERNEL);
 		if (!thread->udsts[i])
 			goto err_dstbuf;
@@ -514,7 +667,6 @@ static int dmatest_func(void *data)
 			thread->dsts[i] = thread->udsts[i];
 	}
 	thread->dsts[i] = NULL;
-
 	set_user_nice(current, 10);
 
 	/*
@@ -529,11 +681,11 @@ static int dmatest_func(void *data)
 		struct dmaengine_unmap_data *um;
 		dma_addr_t srcs[src_cnt];
 		dma_addr_t *dsts;
-		unsigned int src_off, dst_off, len;
+		unsigned int src_off, dst_off, len = 0;
+		unsigned int blk_sz;
 		struct scatterlist tx_sg[src_cnt];
 		struct scatterlist rx_sg[src_cnt];
 
-		total_tests++;
 
 		/* Check if buffer count fits into map count variable (u8) */
 		if ((src_cnt + dst_cnt) >= 255) {
@@ -544,51 +696,85 @@ static int dmatest_func(void *data)
 
 		if (1 << align > params->buf_size) {
 			pr_err("%u-byte buffer too small for %d-byte alignment\n",
-			       params->buf_size, 1 << align);
+			       buf_size, 1 << align);
 			break;
 		}
 
-		if (params->noverify)
-			len = params->buf_size;
-		else
-			len = dmatest_random() % params->buf_size + 1;
+		/* honor block size restrictions */
+		blk_sz = 1 << align;
+		if (thread->type == DMA_DIF_INSERT ||
+		    thread->type == DMA_DIF_STRIP ||
+		    thread->type == DMA_DIF_UPDATE)
+			blk_sz = params->dif_blk_sz;
 
-		len = (len >> align) << align;
-		if (!len)
-			len = 1 << align;
+		if( params->noverify)
+			data_len = params->buf_size;
+		else {
+			data_len = dmatest_random() % params->buf_size + 1;
+			//data_len -= (data_len % blk_sz);
+		}
 
-		total_len += len;
+		data_len = (data_len >> align) << align;
 
+
+		if (thread->type == DMA_DIF_INSERT ||
+		    thread->type == DMA_DIF_STRIP ||
+		    thread->type == DMA_DIF_UPDATE)
+			data_len = params->buf_size;
+
+
+		if (!data_len)
+			data_len = blk_sz;
+
+		total_len += data_len;
+		src_len = data_len;
+		if (thread->type == DMA_DIF_INSERT ||
+		    thread->type == DMA_DIF_UPDATE)
+			dst_len += ((dst_len / blk_sz) * 8);
+
+		dst_len = data_len;
+		if (thread->type == DMA_DIF_STRIP ||
+		    thread->type == DMA_DIF_UPDATE)
+			src_len += ((src_len / blk_sz) * 8);
+
+		if (!(thread->type == DMA_DIF_INSERT ||
+		    thread->type == DMA_DIF_STRIP ||
+		    thread->type == DMA_DIF_UPDATE))
+		{
+			src_len = data_len;
+			dst_len = data_len;
+		}
 		if (params->noverify) {
 			src_off = 0;
 			dst_off = 0;
 		} else {
-			start = ktime_get();
-			src_off = dmatest_random() % (params->buf_size - len + 1);
-			dst_off = dmatest_random() % (params->buf_size - len + 1);
-
+			src_off = dmatest_random() % (buf_size - src_len + 1);
+			dst_off = dmatest_random() % (buf_size - dst_len + 1);
 			src_off = (src_off >> align) << align;
 			dst_off = (dst_off >> align) << align;
-
-			dmatest_init_srcs(thread->srcs, src_off, len,
-					  params->buf_size);
-			dmatest_init_dsts(thread->dsts, dst_off, len,
-					  params->buf_size);
-
-			diff = ktime_sub(ktime_get(), start);
-			filltime = ktime_add(filltime, diff);
 		}
-
-		um = dmaengine_get_unmap_data(dev->dev, src_cnt + dst_cnt,
+		if (thread->type == DMA_DIF_STRIP ||
+				thread->type == DMA_DIF_UPDATE) {
+				dmatest_init_dif_srcs(thread->srcs, src_off, src_len,
+							  buf_size, blk_sz,
+							  params->dif_app_tag, params->dif_ref_tag);
+		} else {
+				dmatest_init_srcs(thread->srcs, src_off, src_len,
+						  buf_size);
+		}
+		dmatest_init_dsts(thread->dsts, dst_off, dst_len,buf_size);
+		diff = ktime_sub(ktime_get(), start);
+		filltime = ktime_add(filltime, diff);
+		um = dmaengine_get_unmap_data(dev->dev, src_cnt+dst_cnt,
 					      GFP_KERNEL);
 		if (!um) {
 			failed_tests++;
 			result("unmap data NULL", total_tests,
-			       src_off, dst_off, len, ret);
+			       src_off, dst_off, data_len, ret);
 			continue;
 		}
 
-		um->len = params->buf_size;
+		um->len = buf_size;
 		for (i = 0; i < src_cnt; i++) {
 			void *buf = thread->srcs[i];
 			struct page *pg = virt_to_page(buf);
@@ -601,7 +787,7 @@ static int dmatest_func(void *data)
 			if (ret) {
 				dmaengine_unmap_put(um);
 				result("src mapping error", total_tests,
-				       src_off, dst_off, len, ret);
+				       src_off, dst_off, data_len, ret);
 				failed_tests++;
 				continue;
 			}
@@ -620,7 +806,7 @@ static int dmatest_func(void *data)
 			if (ret) {
 				dmaengine_unmap_put(um);
 				result("dst mapping error", total_tests,
-				       src_off, dst_off, len, ret);
+				       src_off, dst_off, dst_len, ret);
 				failed_tests++;
 				continue;
 			}
@@ -639,7 +825,7 @@ static int dmatest_func(void *data)
 		if (thread->type == DMA_MEMCPY)
 			tx = dev->device_prep_dma_memcpy(chan,
 							 dsts[0] + dst_off,
-							 srcs[0], len, flags);
+							 srcs[0], data_len, flags);
 		else if (thread->type == DMA_SG)
 			tx = dev->device_prep_dma_sg(chan, tx_sg, src_cnt,
 						     rx_sg, src_cnt, flags);
@@ -647,7 +833,7 @@ static int dmatest_func(void *data)
 			tx = dev->device_prep_dma_xor(chan,
 						      dsts[0] + dst_off,
 						      srcs, src_cnt,
-						      len, flags);
+					              data_len, flags);
 		else if (thread->type == DMA_PQ) {
 			dma_addr_t dma_pq[dst_cnt];
 
@@ -655,13 +841,43 @@ static int dmatest_func(void *data)
 				dma_pq[i] = dsts[i] + dst_off;
 			tx = dev->device_prep_dma_pq(chan, dma_pq, srcs,
 						     src_cnt, pq_coefs,
-						     len, flags);
+						     data_len, flags);
+		} else if (thread->type == DMA_DIF_INSERT) {
+		        tx = dev->device_prep_dma_dif_insert(chan,
+							     params->dif_blk_sz,
+							     srcs[0],
+							     dsts[0] + dst_off,
+							     data_len,
+							     params->dif_app_tag, params->dif_ref_tag,
+							     0,
+							     flags);
+		} else if (thread->type == DMA_DIF_STRIP) {
+			tx = dev->device_prep_dma_dif_strip(chan,
+							    params->dif_blk_sz,
+							    srcs[0],
+							    dsts[0] + dst_off,
+							    src_len,
+							    params->dif_app_tag, params->dif_ref_tag,
+							    &difres,
+							    0,
+							    flags);
+		} else if (thread->type == DMA_DIF_UPDATE) {
+			tx = dev->device_prep_dma_dif_update(chan,
+							     params->dif_blk_sz,
+							     srcs[0],
+							     dsts[0] + dst_off,
+							     src_len,
+							     params->dif_app_tag, params->dif_ref_tag,
+							     params->dif_app_tag, params->dif_ref_tag,
+							     &difres,
+							     0,
+							     flags);
 		}
 
 		if (!tx) {
 			dmaengine_unmap_put(um);
 			result("prep error", total_tests, src_off,
-			       dst_off, len, ret);
+			       dst_off, data_len, ret);
 			msleep(100);
 			failed_tests++;
 			continue;
@@ -675,7 +891,7 @@ static int dmatest_func(void *data)
 		if (dma_submit_error(cookie)) {
 			dmaengine_unmap_put(um);
 			result("submit error", total_tests, src_off,
-			       dst_off, len, ret);
+			       dst_off, data_len, ret);
 			msleep(100);
 			failed_tests++;
 			continue;
@@ -698,7 +914,7 @@ static int dmatest_func(void *data)
 			 */
 			dmaengine_unmap_put(um);
 			result("test timed out", total_tests, src_off, dst_off,
-			       len, 0);
+			       data_len, 0);
 			failed_tests++;
 			continue;
 		} else if (status != DMA_COMPLETE) {
@@ -706,7 +922,7 @@ static int dmatest_func(void *data)
 			result(status == DMA_ERROR ?
 			       "completion error status" :
 			       "completion busy status", total_tests, src_off,
-			       dst_off, len, ret);
+			       dst_off, data_len, ret);
 			failed_tests++;
 			continue;
 		}
@@ -715,48 +931,83 @@ static int dmatest_func(void *data)
 
 		if (params->noverify) {
 			verbose_result("test passed", total_tests, src_off,
-				       dst_off, len, 0);
+				       dst_off, data_len, 0);
 			continue;
 		}
 
 		start = ktime_get();
-		pr_debug("%s: verifying source buffer...\n", current->comm);
-		error_count = dmatest_verify(thread->srcs, 0, src_off,
-				0, PATTERN_SRC, true);
-		error_count += dmatest_verify(thread->srcs, src_off,
-				src_off + len, src_off,
-				PATTERN_SRC | PATTERN_COPY, true);
-		error_count += dmatest_verify(thread->srcs, src_off + len,
-				params->buf_size, src_off + len,
-				PATTERN_SRC, true);
+		pr_info("%s: verifying source buffer...\n", current->comm);
+		if (thread->type == DMA_DIF_STRIP ||
+		    thread->type == DMA_DIF_UPDATE) {
+			error_count += dmatest_dif_verify(thread->srcs[0],
+					params->dif_blk_sz,
+					src_off,
+					src_off + src_len, src_off,
+				        PATTERN_SRC | PATTERN_COPY, true,
+					params->dif_app_tag, params->dif_ref_tag);
+		} else {
+			error_count = dmatest_verify(thread->srcs, 0, src_off,
+						     0, PATTERN_SRC, true);
+			error_count += dmatest_verify(thread->srcs, src_off,
+						      src_off + data_len,
+						      src_off,
+						      PATTERN_SRC | PATTERN_COPY,
+						      true);
+			error_count += dmatest_verify(thread->srcs,
+						      src_off + data_len,
+						      buf_size,
+						      src_off + data_len,
+						      PATTERN_SRC, true);
+		}
+		pr_info("%s: verifying dest buffer...\n", current->comm);
+		if (thread->type == DMA_DIF_INSERT ||
+		    thread->type == DMA_DIF_UPDATE) {
+			error_count += dmatest_dif_verify(thread->dsts[0],
+					params->dif_blk_sz,
+					dst_off,
+					dst_off + dst_len, src_off,
+				        PATTERN_SRC | PATTERN_COPY, false,
+					params->dif_app_tag, params->dif_ref_tag);
+		} else {
+			error_count += dmatest_verify(thread->dsts, 0, dst_off,
+					0, PATTERN_DST, false);
+			error_count += dmatest_verify(thread->dsts, dst_off,
+					dst_off + data_len, src_off,
+					PATTERN_SRC | PATTERN_COPY, false);
+			error_count += dmatest_verify(thread->dsts,
+					dst_off + data_len,
+					buf_size, dst_off + data_len,
+					PATTERN_DST, false);
+		}
 
-		pr_debug("%s: verifying dest buffer...\n", current->comm);
-		error_count += dmatest_verify(thread->dsts, 0, dst_off,
-				0, PATTERN_DST, false);
-		error_count += dmatest_verify(thread->dsts, dst_off,
-				dst_off + len, src_off,
-				PATTERN_SRC | PATTERN_COPY, false);
-		error_count += dmatest_verify(thread->dsts, dst_off + len,
-				params->buf_size, dst_off + len,
-				PATTERN_DST, false);
-
-		diff = ktime_sub(ktime_get(), start);
-		comparetime = ktime_add(comparetime, diff);
+		diff = ktime_sub( ktime_get(), start );
+		comparetime = ktime_add( comparetime, diff );
+		if (thread->type == DMA_DIF_STRIP ||
+		    thread->type == DMA_DIF_UPDATE) {
+			if (difres & DIF_CHECK_GUARD_RESULT) {
+				pr_info("%s: DIF CRC error\n", current->comm);
+				error_count++;
+			}
+			if (difres & DIF_CHECK_APP_RESULT) {
+				pr_info("%s: DIF app tag error\n", current->comm);
+				error_count++;
+			}
+			if (difres & DIF_CHECK_REF_RESULT) {
+				pr_info("%s: DIF ref tag error\n", current->comm);
+				error_count++;
+			}
+		}
 
 		if (error_count) {
 			result("data error", total_tests, src_off, dst_off,
-			       len, error_count);
+			       data_len, error_count);
 			failed_tests++;
 		} else {
 			verbose_result("test passed", total_tests, src_off,
-				       dst_off, len, 0);
+				       dst_off, data_len, 0);
 		}
 	}
-	ktime = ktime_sub(ktime_get(), ktime);
-	ktime = ktime_sub(ktime, comparetime);
-	ktime = ktime_sub(ktime, filltime);
-	runtime = ktime_to_us(ktime);
-
+	runtime = ktime_us_delta(ktime_get(), ktime);
 	ret = 0;
 err_dstbuf:
 	for (i = 0; thread->udsts[i]; i++)
@@ -827,6 +1078,12 @@ static int dmatest_add_threads(struct dmatest_info *info,
 		op = "xor";
 	else if (type == DMA_PQ)
 		op = "pq";
+	else if (type == DMA_DIF_INSERT)
+		op = "dif_insert";
+	else if (type == DMA_DIF_STRIP)
+		op = "dif_strip";
+	else if (type == DMA_DIF_UPDATE)
+		op = "dif_update";
 	else
 		return -EINVAL;
 
@@ -898,6 +1155,18 @@ static int dmatest_add_channel(struct dmatest_info *info,
 		cnt = dmatest_add_threads(info, dtc, DMA_PQ);
 		thread_count += cnt > 0 ? cnt : 0;
 	}
+	if (dma_has_cap(DMA_DIF_INSERT, dma_dev->cap_mask)) {
+		cnt = dmatest_add_threads(info, dtc, DMA_DIF_INSERT);
+		thread_count += cnt > 0 ? cnt : 0;
+	}
+	if (dma_has_cap(DMA_DIF_STRIP, dma_dev->cap_mask)) {
+		cnt = dmatest_add_threads(info, dtc, DMA_DIF_STRIP);
+		thread_count += cnt > 0 ? cnt : 0;
+	}
+	if (dma_has_cap(DMA_DIF_UPDATE, dma_dev->cap_mask)) {
+		cnt = dmatest_add_threads(info, dtc, DMA_DIF_UPDATE);
+		thread_count += cnt > 0 ? cnt : 0;
+	}
 
 	pr_info("Started %u threads using %s\n",
 		thread_count, dma_chan_name(chan));
@@ -959,11 +1228,18 @@ static void run_threaded_test(struct dmatest_info *info)
 	params->pq_sources = pq_sources;
 	params->timeout = timeout;
 	params->noverify = noverify;
+	params->dif_blk_sz = dif_blk_sz;
+	params->dif_app_tag = dif_app_tag;
+	params->dif_ref_tag = dif_ref_tag;
 
 	request_channels(info, DMA_MEMCPY);
 	request_channels(info, DMA_XOR);
 	request_channels(info, DMA_SG);
 	request_channels(info, DMA_PQ);
+
+	request_channels(info, DMA_DIF_INSERT);
+	request_channels(info, DMA_DIF_STRIP);
+	request_channels(info, DMA_DIF_UPDATE);
 }
 
 static void stop_threaded_test(struct dmatest_info *info)

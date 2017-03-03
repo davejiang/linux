@@ -69,6 +69,19 @@ In both cases the module parameters are used as the actual values for the test
 case. You always could check them at run-time by running
 	% grep -H . /sys/module/dmatest/parameters/*
 
+For DMA engines that support DIF operations, additional parameters to control the
+DIF parameters may be specified:
+
+	dif_blk_sz: size of the data component of each block (not including the
+	DIF protection data), defaulting to 512
+
+	dif_app_tag: application tag to use in DIF operations (16 bits)
+
+	dif_ref_tag: reference tag seed to use in the test DIF operations (32 bits)
+
+The DIF guard field (CRC) is generated automatically from the test data and does not
+need to be specified as a parameter.
+
 	Part 4 - Gathering the test results
 
 Test results are printed to the kernel log buffer with the format:

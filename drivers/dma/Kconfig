@@ -607,7 +607,7 @@ config ASYNC_TX_DMA
 
 config DMATEST
 	tristate "DMA Test client"
-	depends on DMA_ENGINE
+	depends on DMA_ENGINE && CRC_T10DIF
 	select DMA_ENGINE_RAID
 	help
 	  Simple DMA test client. Say N unless you're debugging a
