@@ -1081,6 +1081,8 @@ static int ioat3_dma_probe(struct ioatdma_device *ioat_dma, int dca)
 
 	dma = &ioat_dma->dma_dev;
 	dma->device_prep_dma_memcpy = ioat_dma_prep_memcpy_lock;
+	dma_cap_set(DMA_MEMCPY_SG, dma->cap_mask);
+	dma->device_prep_dma_memcpy_sg = ioat_dma_prep_memcpy_sg_lock;
 	dma->device_issue_pending = ioat_issue_pending;
 	dma->device_alloc_chan_resources = ioat_alloc_chan_resources;
 	dma->device_free_chan_resources = ioat_free_chan_resources;
