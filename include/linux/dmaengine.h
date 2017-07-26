@@ -464,15 +464,26 @@ struct dmaengine_result {
 typedef void (*dma_async_tx_callback_result)(void *dma_async_param,
 				const struct dmaengine_result *result);
 
+struct dmaengine_unmap_sg {
+	struct scatterlist *sg;
+	dma_addr_t buf_phys;
+};
+
 struct dmaengine_unmap_data {
 	u8 map_cnt;
 	u8 to_cnt;
+	u8 to_sg;
 	u8 from_cnt;
+	u8 from_sg;
 	u8 bidi_cnt;
+	int sg_nents;
 	struct device *dev;
 	struct kref kref;
 	size_t len;
-	dma_addr_t addr[0];
+	union {
+		struct dmaengine_unmap_sg unmap_sg;
+		dma_addr_t addr[0];
+	};
 };
 
 /**

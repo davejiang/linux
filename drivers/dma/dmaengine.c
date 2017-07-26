@@ -1120,11 +1120,38 @@ static struct dmaengine_unmap_pool *__get_unmap_pool(int nr)
 	}
 }
 
+static void dmaengine_unmap_sg(struct dmaengine_unmap_data *unmap)
+{
+	struct device *dev = unmap->dev;
+
+	if (unmap->to_sg) {
+		dma_unmap_sg(dev, unmap->unmap_sg.sg,
+				unmap->sg_nents, DMA_TO_DEVICE);
+
+		dma_unmap_page(dev, unmap->unmap_sg.buf_phys, unmap->len,
+					DMA_FROM_DEVICE);
+	}
+
+	if (unmap->from_sg) {
+		dma_unmap_page(dev, unmap->unmap_sg.buf_phys, unmap->len,
+				DMA_TO_DEVICE);
+		dma_unmap_sg(dev, unmap->unmap_sg.sg,
+				unmap->sg_nents, DMA_FROM_DEVICE);
+	}
+
+	mempool_free(unmap, __get_unmap_pool(unmap->map_cnt)->pool);
+}
+
 static void dmaengine_unmap(struct kref *kref)
 {
 	struct dmaengine_unmap_data *unmap = container_of(kref, typeof(*unmap), kref);
 	struct device *dev = unmap->dev;
 	int cnt, i;
+
+	if (unmap->to_sg || unmap->from_sg) {
+		dmaengine_unmap_sg(unmap);
+		return;
+	}
 
 	cnt = unmap->to_cnt;
 	for (i = 0; i < cnt; i++)
