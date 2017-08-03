@@ -181,6 +181,9 @@ Currently, the types available are:
     - Used by the client drivers to register a callback that will be
       called on a regular basis through the DMA controller interrupt
 
+  * DMA_MEMCPY_SG
+    - The device supports scatterlist to/from memory.
+
   * DMA_PRIVATE
     - The devices only supports slave transfers, and as such isn't
       available for async transfers.
