@@ -40,6 +40,24 @@ config BLK_DEV_PMEM
 
 	  Say Y if you want to use an NVDIMM
 
+config BLK_DEV_PMEM_DMA
+	tristate "PMEM: Persistent memory block device with DMA support"
+	depends on DMA_ENGINE
+	depends on BLK_DEV_PMEM=m || !BLK_DEV_PMEM
+	default LIBNVDIMM
+	select BLK_DEV_PMEM_CORE
+	help
+	  This driver utilizes DMA engines provided by the platform to
+	  help offload the data copying. The desire for this driver is to
+	  reduce CPU utilization with some sacrifice in latency and
+	  performance. Initial benchmarks on DRAM showed that as low
+	  as about 30% of the CPU was used for DMA vs doing CPU copy with
+	  some reduction in throughput. Be aware that when DAX is used,
+	  DMA is bypassed and only CPU is used. The path for using DMA is
+	  only through the normal block device path.
+
+	  Say Y if you want to use an NVDIMM
+
 config ND_BLK
 	tristate "BLK: Block data window (aperture) device support"
 	default LIBNVDIMM

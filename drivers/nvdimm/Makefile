@@ -1,6 +1,7 @@
 obj-$(CONFIG_LIBNVDIMM) += libnvdimm.o
 obj-$(CONFIG_BLK_DEV_PMEM_CORE) += nd_pmem_core.o
 obj-$(CONFIG_BLK_DEV_PMEM) += nd_pmem.o
+obj-$(CONFIG_BLK_DEV_PMEM_DMA) += nd_pmem_dma.o
 obj-$(CONFIG_ND_BTT) += nd_btt.o
 obj-$(CONFIG_ND_BLK) += nd_blk.o
 obj-$(CONFIG_X86_PMEM_LEGACY) += nd_e820.o
@@ -8,6 +9,8 @@ obj-$(CONFIG_X86_PMEM_LEGACY) += nd_e820.o
 nd_pmem_core-y := pmem_core.o
 
 nd_pmem-y := pmem.o
+
+nd_pmem_dma-y := pmem_dma.o
 
 nd_btt-y := btt.o
 

@@ -40,6 +40,8 @@ struct pmem_device {
 	struct gendisk		*disk;
 	struct blk_mq_tag_set	tag_set;
 	struct request_queue	*q;
+	unsigned int		sg_allocated;
+	bool			has_dma;
 };
 
 static inline struct device *to_dev(struct pmem_device *pmem)
