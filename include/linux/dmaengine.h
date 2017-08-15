@@ -743,6 +743,7 @@ struct dma_device {
 	u32 max_burst;
 	bool descriptor_reuse;
 	enum dma_residue_granularity residue_granularity;
+	u64 xfercap;	/* descriptor transfer capability limit */
 
 	int (*device_alloc_chan_resources)(struct dma_chan *chan);
 	void (*device_free_chan_resources)(struct dma_chan *chan);
@@ -1326,6 +1327,11 @@ struct dma_chan *dma_request_chan_by_mask(const dma_cap_mask_t *mask);
 
 void dma_release_channel(struct dma_chan *chan);
 int dma_get_slave_caps(struct dma_chan *chan, struct dma_slave_caps *caps);
+
+static inline u64 dma_get_desc_xfercap(struct dma_chan *chan)
+{
+	return chan->device->xfercap;
+}
 #else
 static inline struct dma_chan *dma_find_channel(enum dma_transaction_type tx_type)
 {
@@ -1367,6 +1373,10 @@ static inline void dma_release_channel(struct dma_chan *chan)
 }
 static inline int dma_get_slave_caps(struct dma_chan *chan,
 				     struct dma_slave_caps *caps)
+{
+	return -ENXIO;
+}
+static inline u64 dma_get_desc_xfercap(struct dma_chan *chan)
 {
 	return -ENXIO;
 }

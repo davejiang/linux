@@ -596,6 +596,7 @@ static int ioat_enumerate_channels(struct ioatdma_device *ioat_dma)
 	if (xfercap_log == 0)
 		return 0;
 	dev_dbg(dev, "%s: xfercap = %d\n", __func__, 1 << xfercap_log);
+	dma->xfercap = 1 << xfercap_log;
 
 	for (i = 0; i < dma->chancnt; i++) {
 		ioat_chan = devm_kzalloc(dev, sizeof(*ioat_chan), GFP_KERNEL);
