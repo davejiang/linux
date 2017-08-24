@@ -1331,6 +1331,8 @@ enum dma_status dma_wait_for_async_tx(struct dma_async_tx_descriptor *tx);
 void dma_issue_pending_all(void);
 struct dma_chan *__dma_request_channel(const dma_cap_mask_t *mask,
 					dma_filter_fn fn, void *fn_param);
+int dma_get_channel_count(const dma_cap_mask_t *mask,
+					dma_filter_fn fn, void *fn_param);
 struct dma_chan *dma_request_slave_channel(struct device *dev, const char *name);
 
 struct dma_chan *dma_request_chan(struct device *dev, const char *name);
@@ -1363,6 +1365,11 @@ static inline struct dma_chan *__dma_request_channel(const dma_cap_mask_t *mask,
 					      dma_filter_fn fn, void *fn_param)
 {
 	return NULL;
+}
+static inline int dma_get_channel_count(const dma_cap_mask_t *mask,
+					dma_filter_fn fn, void *fn_param)
+{
+	return 0;
 }
 static inline struct dma_chan *dma_request_slave_channel(struct device *dev,
 							 const char *name)

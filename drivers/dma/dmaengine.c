@@ -674,6 +674,51 @@ struct dma_chan *__dma_request_channel(const dma_cap_mask_t *mask,
 }
 EXPORT_SYMBOL_GPL(__dma_request_channel);
 
+static int get_candidate_count(const dma_cap_mask_t *mask,
+					  struct dma_device *dev,
+					  dma_filter_fn fn, void *fn_param)
+{
+	struct dma_chan *chan;
+	int count = 0;
+
+	if (mask && !__dma_device_satisfies_mask(dev, mask)) {
+		dev_dbg(dev->dev, "%s: wrong capabilities\n", __func__);
+		return 0;
+	}
+
+	list_for_each_entry(chan, &dev->channels, device_node) {
+		if (dma_has_cap(DMA_PRIVATE, dev->cap_mask)) {
+			dev_dbg(dev->dev, "%s: %s is marked for private\n",
+				 __func__, dma_chan_name(chan));
+			continue;
+		}
+		if (fn && !fn(chan, fn_param)) {
+			dev_dbg(dev->dev, "%s: %s filter said false\n",
+				 __func__, dma_chan_name(chan));
+			continue;
+		}
+		count++;
+	}
+
+	return count;
+}
+
+int dma_get_channel_count(const dma_cap_mask_t *mask,
+			    dma_filter_fn fn, void *fn_param)
+{
+	struct dma_device *device;
+	int total = 0;
+
+	/* Find a channel */
+	mutex_lock(&dma_list_mutex);
+	list_for_each_entry(device, &dma_device_list, global_node)
+		total += get_candidate_count(mask, device, fn, fn_param);
+	mutex_unlock(&dma_list_mutex);
+
+	return total;
+}
+EXPORT_SYMBOL_GPL(dma_get_channel_count);
+
 static const struct dma_slave_map *dma_filter_match(struct dma_device *device,
 						    const char *name,
 						    struct device *dev)
