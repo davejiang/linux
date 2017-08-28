@@ -17,12 +17,16 @@ menuconfig LIBNVDIMM
 
 if LIBNVDIMM
 
-config BLK_DEV_PMEM
-	tristate "PMEM: Persistent memory block device support"
-	default LIBNVDIMM
+config BLK_DEV_PMEM_CORE
+	tristate
 	select DAX
 	select ND_BTT if BTT
 	select ND_PFN if NVDIMM_PFN
+
+config BLK_DEV_PMEM
+	tristate "PMEM: Persistent memory block device support"
+	default LIBNVDIMM
+	select BLK_DEV_PMEM_CORE
 	help
 	  Memory ranges for PMEM are described by either an NFIT
 	  (NVDIMM Firmware Interface Table, see CONFIG_NFIT_ACPI), a
