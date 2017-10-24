@@ -468,6 +468,19 @@ static irqreturn_t ndev_irq_isr(int irq, void *dev)
 	return ndev_interrupt(ndev, irq, irq - ndev->ntb.pdev->irq);
 }
 
+static int intel_ntb_set_irq_affinity(struct pci_dev *pdev, int cpu, int vec)
+{
+	cpumask_var_t mask;
+
+	if (!zalloc_cpumask_var(&mask, GFP_KERNEL))
+		return -ENOMEM;
+
+	cpumask_set_cpu(0, mask);
+	irq_set_affinity_hint(vec, mask);
+	free_cpumask_var(mask);
+	return 0;
+}
+
 static int ndev_init_isr(struct intel_ntb_dev *ndev,
 			 int msix_min, int msix_max,
 			 int msix_shift, int total_shift)
@@ -516,6 +529,16 @@ static int ndev_init_isr(struct intel_ntb_dev *ndev,
 				 irq_flags, "ndev_vec_isr", &ndev->vec[i]);
 		if (rc)
 			goto err_msix_request;
+		if (ndev->hwerr_flags & NTB_HWERR_SB01BASE_LOCKUP) {
+			/* set affinity to core 0 */
+			rc = intel_ntb_set_irq_affinity(pdev, 0,
+					ndev->msix[i].vector);
+			if (rc < 0) {
+				dev_warn(&pdev->dev,
+					"Setting affinity for vec %d failed\n",
+					ndev->msix[i].vector);
+			}
+		}
 	}
 
 	dev_dbg(&pdev->dev, "Using %d msix interrupts\n", msix_count);
