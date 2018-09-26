@@ -442,6 +442,9 @@ static ssize_t security_store(struct device *dev,
 			return -EINVAL;
 		dev_dbg(dev, "disable %#x\n", old_key);
 		rc = nvdimm_security_disable(dev, old_key);
+	} else if (sysfs_streq(buf, "freeze")) {
+		dev_dbg(dev, "freeze\n");
+		rc = nvdimm_security_freeze_lock(dev);
 	} else
 		return -EINVAL;
 
