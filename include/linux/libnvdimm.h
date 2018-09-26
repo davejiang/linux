@@ -155,6 +155,30 @@ static inline struct nd_blk_region_desc *to_blk_region_desc(
 
 }
 
+enum nvdimm_security_state {
+	NVDIMM_SECURITY_INVALID = 0,
+	NVDIMM_SECURITY_DISABLED,
+	NVDIMM_SECURITY_UNLOCKED,
+	NVDIMM_SECURITY_LOCKED,
+	NVDIMM_SECURITY_UNSUPPORTED,
+};
+
+#define NVDIMM_PASSPHRASE_LEN		32
+#define NVDIMM_KEY_DESC_LEN		22
+
+struct nvdimm_key_data {
+	u8 data[NVDIMM_PASSPHRASE_LEN];
+};
+
+struct nvdimm_security_ops {
+	int (*state)(struct nvdimm_bus *nvdimm_bus,
+			struct nvdimm *nvdimm,
+			enum nvdimm_security_state *state);
+	int (*unlock)(struct nvdimm_bus *nvdimm_bus,
+			struct nvdimm *nvdimm,
+			const struct nvdimm_key_data *nkey);
+};
+
 void badrange_init(struct badrange *badrange);
 int badrange_add(struct badrange *badrange, u64 addr, u64 length);
 void badrange_forget(struct badrange *badrange, phys_addr_t start,
@@ -178,7 +202,8 @@ void *nvdimm_provider_data(struct nvdimm *nvdimm);
 struct nvdimm *nvdimm_create(struct nvdimm_bus *nvdimm_bus, void *provider_data,
 		const struct attribute_group **groups, unsigned long flags,
 		unsigned long cmd_mask, int num_flush,
-		struct resource *flush_wpq, const char *dimm_id);
+		struct resource *flush_wpq, const char *dimm_id,
+		const struct nvdimm_security_ops *sec_ops);
 const struct nd_cmd_desc *nd_cmd_dimm_desc(int cmd);
 const struct nd_cmd_desc *nd_cmd_bus_desc(int cmd);
 u32 nd_cmd_in_size(struct nvdimm *nvdimm, int cmd,

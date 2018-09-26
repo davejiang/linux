@@ -17,6 +17,7 @@
 #include <linux/sizes.h>
 #include <linux/mutex.h>
 #include <linux/nd.h>
+#include <linux/key.h>
 
 extern struct list_head nvdimm_bus_list;
 extern struct mutex nvdimm_bus_list_mutex;
@@ -42,6 +43,10 @@ struct nvdimm {
 	int id, num_flush;
 	struct resource *flush_wpq;
 	const char *dimm_id;
+	const struct nvdimm_security_ops *security_ops;
+	enum nvdimm_security_state state;
+	struct key *key;
+	struct mutex key_mutex;
 };
 
 /**

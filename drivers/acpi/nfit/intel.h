@@ -8,6 +8,8 @@
 
 #ifdef CONFIG_X86
 
+extern const struct nvdimm_security_ops intel_security_ops;
+
 #define ND_INTEL_STATUS_SIZE		4
 #define ND_INTEL_PASSPHRASE_SIZE	32
 
@@ -63,5 +65,18 @@ struct nd_intel_query_overwrite {
 	u32 status;
 } __packed;
 #endif /* CONFIG_X86 */
+
+static inline const struct nvdimm_security_ops *
+acpi_nfit_get_security_ops(int family)
+{
+	switch (family) {
+#ifdef CONFIG_X86
+	case NVDIMM_FAMILY_INTEL:
+		return &intel_security_ops;
+#endif
+	default:
+		return NULL;
+	}
+}
 
 #endif

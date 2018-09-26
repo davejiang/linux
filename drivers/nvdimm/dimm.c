@@ -51,6 +51,13 @@ static int nvdimm_probe(struct device *dev)
 	get_device(dev);
 	kref_init(&ndd->kref);
 
+	nvdimm_security_get_state(dev);
+
+	/* unlock DIMM here before touch label */
+	rc = nvdimm_security_unlock_dimm(dev);
+	if (rc < 0)
+		dev_warn(dev, "failed to unlock dimm %s\n", dev_name(dev));
+
 	/*
 	 * EACCES failures reading the namespace label-area-properties
 	 * are interpreted as the DIMM capacity being locked but the

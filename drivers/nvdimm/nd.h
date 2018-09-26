@@ -423,4 +423,25 @@ static inline bool is_bad_pmem(struct badblocks *bb, sector_t sector,
 resource_size_t nd_namespace_blk_validate(struct nd_namespace_blk *nsblk);
 const u8 *nd_dev_to_uuid(struct device *dev);
 bool pmem_should_map_pages(struct device *dev);
+
+#ifdef CONFIG_NVDIMM_SECURITY
+struct key *nvdimm_get_key(struct device *dev);
+int nvdimm_security_unlock_dimm(struct device *dev);
+int nvdimm_security_get_state(struct device *dev);
+#else
+static inline struct key *nvdimm_get_key(struct device *dev)
+{
+	return NULL;
+}
+
+static inline int nvdimm_security_unlock_dimm(struct device *dev)
+{
+	return 0;
+}
+
+static inline int nvdimm_security_get_state(struct device *dev)
+{
+	return -EOPNOTSUPP;
+}
+#endif
 #endif /* __ND_H__ */

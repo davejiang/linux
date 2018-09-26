@@ -1904,7 +1904,8 @@ static int acpi_nfit_register_dimms(struct acpi_nfit_desc *acpi_desc)
 		nvdimm = nvdimm_create(acpi_desc->nvdimm_bus, nfit_mem,
 				acpi_nfit_dimm_attribute_groups,
 				flags, cmd_mask, flush ? flush->hint_count : 0,
-				nfit_mem->flush_wpq, &nfit_mem->id[0]);
+				nfit_mem->flush_wpq, &nfit_mem->id[0],
+				acpi_nfit_get_security_ops(nfit_mem->family));
 		if (!nvdimm)
 			return -ENOMEM;
 

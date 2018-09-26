@@ -18,6 +18,7 @@
 #include <linux/io.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/key.h>
 #include "nd-core.h"
 #include "label.h"
 #include "pmem.h"
@@ -212,7 +213,13 @@ void nvdimm_clear_locked(struct device *dev)
 static void nvdimm_release(struct device *dev)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
+	struct key *key;
 
+	mutex_lock(&nvdimm->key_mutex);
+	key = nvdimm_get_key(dev);
+	if (key)
+		key_put(key);
+	mutex_unlock(&nvdimm->key_mutex);
 	ida_simple_remove(&dimm_ida, nvdimm->id);
 	kfree(nvdimm);
 }
@@ -398,7 +405,8 @@ EXPORT_SYMBOL_GPL(nvdimm_attribute_group);
 struct nvdimm *nvdimm_create(struct nvdimm_bus *nvdimm_bus, void *provider_data,
 		const struct attribute_group **groups, unsigned long flags,
 		unsigned long cmd_mask, int num_flush,
-		struct resource *flush_wpq, const char *dimm_id)
+		struct resource *flush_wpq, const char *dimm_id,
+		const struct nvdimm_security_ops *sec_ops)
 {
 	struct nvdimm *nvdimm = kzalloc(sizeof(*nvdimm), GFP_KERNEL);
 	struct device *dev;
@@ -413,12 +421,14 @@ struct nvdimm *nvdimm_create(struct nvdimm_bus *nvdimm_bus, void *provider_data,
 	}
 
 	nvdimm->dimm_id = dimm_id;
+	nvdimm->security_ops = sec_ops;
 	nvdimm->provider_data = provider_data;
 	nvdimm->flags = flags;
 	nvdimm->cmd_mask = cmd_mask;
 	nvdimm->num_flush = num_flush;
 	nvdimm->flush_wpq = flush_wpq;
 	atomic_set(&nvdimm->busy, 0);
+	mutex_init(&nvdimm->key_mutex);
 	dev = &nvdimm->dev;
 	dev_set_name(dev, "nmem%d", nvdimm->id);
 	dev->parent = &nvdimm_bus->dev;

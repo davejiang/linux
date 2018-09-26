@@ -257,4 +257,10 @@ struct nd_cmd_pkg {
 #define ND_IOCTL_CALL			_IOWR(ND_IOCTL, ND_CMD_CALL,\
 					struct nd_cmd_pkg)
 
+/*
+ * The key payload description for nvdimm logon key is:
+ * <prefix><bus-provider-specific-unique-id>
+ */
+static const char NVDIMM_PREFIX[] = "nvdimm:";
+
 #endif /* __NDCTL_H__ */
