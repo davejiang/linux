@@ -164,6 +164,62 @@ int nvdimm_security_get_state(struct device *dev)
 			&nvdimm->state);
 }
 
+int nvdimm_security_disable(struct device *dev, unsigned int keyid)
+{
+	struct nvdimm *nvdimm = to_nvdimm(dev);
+	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
+	struct key *key;
+	int rc;
+	struct user_key_payload *payload;
+	bool is_userkey = false;
+
+	if (!nvdimm->security_ops)
+		return -EOPNOTSUPP;
+
+	if (nvdimm->state == NVDIMM_SECURITY_UNSUPPORTED)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&nvdimm->key_mutex);
+	/* look for a key from cached key */
+	key = nvdimm_get_and_verify_key(dev, keyid);
+	if (IS_ERR(key)) {
+		mutex_unlock(&nvdimm->key_mutex);
+		return PTR_ERR(key);
+	}
+	if (!key) {
+		/* get old user key */
+		key = nvdimm_lookup_user_key(dev, keyid);
+		if (!key) {
+			mutex_unlock(&nvdimm->key_mutex);
+			return -ENOKEY;
+		}
+		is_userkey = true;
+	}
+
+	down_read(&key->sem);
+	payload = key->payload.data[0];
+
+	rc = nvdimm->security_ops->disable(nvdimm_bus, nvdimm,
+			(void *)payload->data);
+	up_read(&key->sem);
+	if (rc < 0) {
+		dev_warn(dev, "unlock failed\n");
+		goto out;
+	}
+
+	/* If we succeed then remove the key */
+	if (!is_userkey) {
+		key_invalidate(key);
+		nvdimm->key = NULL;
+	}
+	key_put(key);
+
+ out:
+	mutex_unlock(&nvdimm->key_mutex);
+	nvdimm_security_get_state(dev);
+	return rc;
+}
+
 int nvdimm_security_unlock_dimm(struct device *dev)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
