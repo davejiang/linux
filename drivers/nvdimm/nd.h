@@ -433,6 +433,8 @@ int nvdimm_security_change_key(struct device *dev, unsigned int old_keyid,
 int nvdimm_security_disable(struct device *dev, unsigned int keyid);
 int nvdimm_security_freeze_lock(struct device *dev);
 int nvdimm_security_erase(struct device *dev, unsigned int keyid);
+ssize_t security_show(struct device *dev, struct device_attribute *attr,
+		char *buf);
 #else
 static inline struct key *nvdimm_get_key(struct device *dev)
 {
