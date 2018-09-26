@@ -24,6 +24,7 @@
 #include <linux/nd.h>
 #include <asm/cacheflush.h>
 #include <acpi/nfit.h>
+#include "intel.h"
 #include "nfit.h"
 
 /*
@@ -377,6 +378,14 @@ static u8 nfit_dsm_revid(unsigned family, unsigned func)
 			[NVDIMM_INTEL_QUERY_FWUPDATE] = 2,
 			[NVDIMM_INTEL_SET_THRESHOLD] = 2,
 			[NVDIMM_INTEL_INJECT_ERROR] = 2,
+			[NVDIMM_INTEL_GET_SECURITY_STATE] = 2,
+			[NVDIMM_INTEL_SET_PASSPHRASE] = 2,
+			[NVDIMM_INTEL_DISABLE_PASSPHRASE] = 2,
+			[NVDIMM_INTEL_UNLOCK_UNIT] = 2,
+			[NVDIMM_INTEL_FREEZE_LOCK] = 2,
+			[NVDIMM_INTEL_SECURE_ERASE] = 2,
+			[NVDIMM_INTEL_OVERWRITE] = 2,
+			[NVDIMM_INTEL_QUERY_OVERWRITE] = 2,
 		},
 	};
 	u8 id;
@@ -3229,7 +3238,7 @@ static int acpi_nfit_flush_probe(struct nvdimm_bus_descriptor *nd_desc)
 	return 0;
 }
 
-static int acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc,
+static int __acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc,
 		struct nvdimm *nvdimm, unsigned int cmd)
 {
 	struct acpi_nfit_desc *acpi_desc = to_acpi_nfit_desc(nd_desc);
@@ -3249,6 +3258,23 @@ static int acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc,
 		return -EBUSY;
 
 	return 0;
+}
+
+/* prevent security commands from being issued via ioctl */
+static int acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc,
+		struct nvdimm *nvdimm, unsigned int cmd, void *buf)
+{
+	struct nd_cmd_pkg *call_pkg = buf;
+	unsigned int func;
+
+	if (nvdimm && cmd == ND_CMD_CALL &&
+			call_pkg->nd_family == NVDIMM_FAMILY_INTEL) {
+		func = call_pkg->nd_command;
+		if ((1 << func) & NVDIMM_INTEL_SECURITY_CMDMASK)
+			return -EOPNOTSUPP;
+	}
+
+	return __acpi_nfit_clear_to_send(nd_desc, nvdimm, cmd);
 }
 
 int acpi_nfit_ars_rescan(struct acpi_nfit_desc *acpi_desc, unsigned long flags)
