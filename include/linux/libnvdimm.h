@@ -172,23 +172,17 @@ struct nvdimm_key_data {
 };
 
 struct nvdimm_security_ops {
-	int (*state)(struct nvdimm_bus *nvdimm_bus,
-			struct nvdimm *nvdimm,
+	int (*state)(struct nvdimm *nvdimm,
 			enum nvdimm_security_state *state);
-	int (*unlock)(struct nvdimm_bus *nvdimm_bus,
-			struct nvdimm *nvdimm,
+	int (*unlock)(struct nvdimm *nvdimm,
 			const struct nvdimm_key_data *nkey);
-	int (*change_key)(struct nvdimm_bus *nvdimm_bus,
-			struct nvdimm *nvdimm,
+	int (*change_key)(struct nvdimm *nvdimm,
 			const struct nvdimm_key_data *old_data,
 			const struct nvdimm_key_data *new_data);
-	int (*disable)(struct nvdimm_bus *nvdimm_bus,
-			struct nvdimm *nvdimm,
+	int (*disable)(struct nvdimm *nvdimm,
 			const struct nvdimm_key_data *nkey);
-	int (*freeze_lock)(struct nvdimm_bus *nvdimm_bus,
-			struct nvdimm *nvdimm);
-	int (*erase)(struct nvdimm_bus *nvdimm_bus,
-			struct nvdimm *nvdimm,
+	int (*freeze_lock)(struct nvdimm *nvdimm);
+	int (*erase)(struct nvdimm *nvdimm,
 			const struct nvdimm_key_data *nkey);
 };
 
@@ -202,6 +196,7 @@ struct nvdimm_bus *nvdimm_bus_register(struct device *parent,
 		struct nvdimm_bus_descriptor *nfit_desc);
 void nvdimm_bus_unregister(struct nvdimm_bus *nvdimm_bus);
 struct nvdimm_bus *to_nvdimm_bus(struct device *dev);
+struct nvdimm_bus *nvdimm_to_bus(struct nvdimm *nvdimm);
 struct nvdimm *to_nvdimm(struct device *dev);
 struct nd_region *to_nd_region(struct device *dev);
 struct device *nd_region_dev(struct nd_region *nd_region);
@@ -242,6 +237,15 @@ u64 nd_fletcher64(void *addr, size_t len, bool le);
 void nvdimm_flush(struct nd_region *nd_region);
 int nvdimm_has_flush(struct nd_region *nd_region);
 int nvdimm_has_cache(struct nd_region *nd_region);
+
+static inline int nvdimm_ctl(struct nvdimm *nvdimm, unsigned int cmd, void *buf,
+		unsigned int buf_len, int *cmd_rc)
+{
+	struct nvdimm_bus *nvdimm_bus = nvdimm_to_bus(nvdimm);
+	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
+
+	return nd_desc->ndctl(nd_desc, nvdimm, cmd, buf, buf_len, cmd_rc);
+}
 
 #ifdef CONFIG_ARCH_HAS_PMEM_API
 #define ARCH_MEMREMAP_PMEM MEMREMAP_WB

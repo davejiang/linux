@@ -18,10 +18,9 @@
 #include "intel.h"
 #include "nfit.h"
 
-static int intel_dimm_security_erase(struct nvdimm_bus *nvdimm_bus,
-		struct nvdimm *nvdimm, const struct nvdimm_key_data *nkey)
+static int intel_dimm_security_erase(struct nvdimm *nvdimm,
+		const struct nvdimm_key_data *nkey)
 {
-	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
 	int cmd_rc, rc = 0;
 	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	struct {
@@ -47,8 +46,7 @@ static int intel_dimm_security_erase(struct nvdimm_bus *nvdimm_bus,
 	wbinvd_on_all_cpus();
 	memcpy(nd_cmd.cmd.passphrase, nkey->data,
 			sizeof(nd_cmd.cmd.passphrase));
-	rc = nd_desc->ndctl(nd_desc, nvdimm, ND_CMD_CALL, &nd_cmd,
-			sizeof(nd_cmd), &cmd_rc);
+	rc = nvdimm_ctl(nvdimm, ND_CMD_CALL, &nd_cmd, sizeof(nd_cmd), &cmd_rc);
 	if (rc < 0)
 		goto out;
 	if (cmd_rc < 0) {
@@ -75,10 +73,8 @@ static int intel_dimm_security_erase(struct nvdimm_bus *nvdimm_bus,
 	return rc;
 }
 
-static int intel_dimm_security_freeze_lock(struct nvdimm_bus *nvdimm_bus,
-		struct nvdimm *nvdimm)
+static int intel_dimm_security_freeze_lock(struct nvdimm *nvdimm)
 {
-	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
 	int cmd_rc, rc = 0;
 	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	struct {
@@ -100,8 +96,7 @@ static int intel_dimm_security_freeze_lock(struct nvdimm_bus *nvdimm_bus,
 	if (!test_bit(NVDIMM_INTEL_FREEZE_LOCK, &nfit_mem->dsm_mask))
 		return -ENOTTY;
 
-	rc = nd_desc->ndctl(nd_desc, nvdimm, ND_CMD_CALL, &nd_cmd,
-			sizeof(nd_cmd), &cmd_rc);
+	rc = nvdimm_ctl(nvdimm, ND_CMD_CALL, &nd_cmd, sizeof(nd_cmd), &cmd_rc);
 	if (rc < 0)
 		goto out;
 	if (cmd_rc < 0) {
@@ -122,10 +117,9 @@ static int intel_dimm_security_freeze_lock(struct nvdimm_bus *nvdimm_bus,
 	return rc;
 }
 
-static int intel_dimm_security_disable(struct nvdimm_bus *nvdimm_bus,
-		struct nvdimm *nvdimm, const struct nvdimm_key_data *nkey)
+static int intel_dimm_security_disable(struct nvdimm *nvdimm,
+		const struct nvdimm_key_data *nkey)
 {
-	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
 	int cmd_rc, rc = 0;
 	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	struct {
@@ -149,8 +143,7 @@ static int intel_dimm_security_disable(struct nvdimm_bus *nvdimm_bus,
 
 	memcpy(nd_cmd.cmd.passphrase, nkey->data,
 			sizeof(nd_cmd.cmd.passphrase));
-	rc = nd_desc->ndctl(nd_desc, nvdimm, ND_CMD_CALL, &nd_cmd,
-			sizeof(nd_cmd), &cmd_rc);
+	rc = nvdimm_ctl(nvdimm, ND_CMD_CALL, &nd_cmd, sizeof(nd_cmd), &cmd_rc);
 	if (rc < 0)
 		goto out;
 	if (cmd_rc < 0) {
@@ -182,12 +175,10 @@ static int intel_dimm_security_disable(struct nvdimm_bus *nvdimm_bus,
  * if the old passphrase is NULL. This typically happens when we are
  * enabling security from the disabled state.
  */
-static int intel_dimm_security_update_passphrase(
-		struct nvdimm_bus *nvdimm_bus, struct nvdimm *nvdimm,
+static int intel_dimm_security_update_passphrase(struct nvdimm *nvdimm,
 		const struct nvdimm_key_data *old_data,
 		const struct nvdimm_key_data *new_data)
 {
-	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
 	int cmd_rc, rc = 0;
 	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	struct {
@@ -216,8 +207,7 @@ static int intel_dimm_security_update_passphrase(
 		memset(nd_cmd.cmd.old_pass, 0, sizeof(nd_cmd.cmd.old_pass));
 	memcpy(nd_cmd.cmd.new_pass, new_data->data,
 			sizeof(nd_cmd.cmd.new_pass));
-	rc = nd_desc->ndctl(nd_desc, nvdimm, ND_CMD_CALL, &nd_cmd,
-			sizeof(nd_cmd), &cmd_rc);
+	rc = nvdimm_ctl(nvdimm, ND_CMD_CALL, &nd_cmd, sizeof(nd_cmd), &cmd_rc);
 	if (rc < 0)
 		goto out;
 	if (cmd_rc < 0) {
@@ -241,10 +231,9 @@ static int intel_dimm_security_update_passphrase(
 	return rc;
 }
 
-static int intel_dimm_security_unlock(struct nvdimm_bus *nvdimm_bus,
-		struct nvdimm *nvdimm, const struct nvdimm_key_data *nkey)
+static int intel_dimm_security_unlock(struct nvdimm *nvdimm,
+		const struct nvdimm_key_data *nkey)
 {
-	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
 	int cmd_rc, rc = 0;
 	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	struct {
@@ -268,8 +257,7 @@ static int intel_dimm_security_unlock(struct nvdimm_bus *nvdimm_bus,
 
 	memcpy(nd_cmd.cmd.passphrase, nkey->data,
 			sizeof(nd_cmd.cmd.passphrase));
-	rc = nd_desc->ndctl(nd_desc, nvdimm, ND_CMD_CALL, &nd_cmd,
-			sizeof(nd_cmd), &cmd_rc);
+	rc = nvdimm_ctl(nvdimm, ND_CMD_CALL, &nd_cmd, sizeof(nd_cmd), &cmd_rc);
 	if (rc < 0)
 		goto out;
 	if (cmd_rc < 0) {
@@ -300,10 +288,9 @@ static int intel_dimm_security_unlock(struct nvdimm_bus *nvdimm_bus,
 	return rc;
 }
 
-static int intel_dimm_security_state(struct nvdimm_bus *nvdimm_bus,
-		struct nvdimm *nvdimm, enum nvdimm_security_state *state)
+static int intel_dimm_security_state(struct nvdimm *nvdimm,
+		enum nvdimm_security_state *state)
 {
-	struct nvdimm_bus_descriptor *nd_desc = to_nd_desc(nvdimm_bus);
 	int cmd_rc, rc = 0;
 	struct nfit_mem *nfit_mem = nvdimm_provider_data(nvdimm);
 	struct {
@@ -331,8 +318,7 @@ static int intel_dimm_security_state(struct nvdimm_bus *nvdimm_bus,
 	}
 
 	*state = NVDIMM_SECURITY_DISABLED;
-	rc = nd_desc->ndctl(nd_desc, nvdimm, ND_CMD_CALL, &nd_cmd,
-			sizeof(nd_cmd), &cmd_rc);
+	rc = nvdimm_ctl(nvdimm, ND_CMD_CALL, &nd_cmd, sizeof(nd_cmd), &cmd_rc);
 	if (rc < 0)
 		goto out;
 	if (cmd_rc < 0) {

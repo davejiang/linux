@@ -155,13 +155,11 @@ out:
 int nvdimm_security_get_state(struct device *dev)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
-	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
 
 	if (!nvdimm->security_ops)
 		return 0;
 
-	return nvdimm->security_ops->state(nvdimm_bus, nvdimm,
-			&nvdimm->state);
+	return nvdimm->security_ops->state(nvdimm, &nvdimm->state);
 }
 
 int nvdimm_security_erase(struct device *dev, unsigned int keyid)
@@ -218,8 +216,8 @@ int nvdimm_security_erase(struct device *dev, unsigned int keyid)
 
 	down_read(&key->sem);
 	payload = key->payload.data[0];
-	rc = nvdimm->security_ops->erase(nvdimm_bus, nvdimm,
-			(void *)payload->data);
+	rc = nvdimm->security_ops->erase(nvdimm,
+			(const struct nvdimm_key_data *)payload->data);
 	up_read(&key->sem);
 
 	/* remove key since secure erase kills the passphrase */
@@ -239,7 +237,6 @@ int nvdimm_security_erase(struct device *dev, unsigned int keyid)
 int nvdimm_security_freeze_lock(struct device *dev)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
-	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
 	int rc;
 
 	if (!nvdimm->security_ops)
@@ -248,7 +245,7 @@ int nvdimm_security_freeze_lock(struct device *dev)
 	if (nvdimm->state == NVDIMM_SECURITY_UNSUPPORTED)
 		return -EOPNOTSUPP;
 
-	rc = nvdimm->security_ops->freeze_lock(nvdimm_bus, nvdimm);
+	rc = nvdimm->security_ops->freeze_lock(nvdimm);
 	if (rc < 0)
 		return rc;
 
@@ -259,7 +256,6 @@ int nvdimm_security_freeze_lock(struct device *dev)
 int nvdimm_security_disable(struct device *dev, unsigned int keyid)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
-	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
 	struct key *key;
 	int rc;
 	struct user_key_payload *payload;
@@ -291,8 +287,8 @@ int nvdimm_security_disable(struct device *dev, unsigned int keyid)
 	down_read(&key->sem);
 	payload = key->payload.data[0];
 
-	rc = nvdimm->security_ops->disable(nvdimm_bus, nvdimm,
-			(void *)payload->data);
+	rc = nvdimm->security_ops->disable(nvdimm,
+			(const struct nvdimm_key_data *)payload->data);
 	up_read(&key->sem);
 	if (rc < 0) {
 		dev_warn(dev, "unlock failed\n");
@@ -315,7 +311,6 @@ int nvdimm_security_disable(struct device *dev, unsigned int keyid)
 int nvdimm_security_unlock_dimm(struct device *dev)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
-	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
 	struct key *key;
 	struct user_key_payload *payload;
 	int rc;
@@ -352,8 +347,8 @@ int nvdimm_security_unlock_dimm(struct device *dev)
 	dev_dbg(dev, "%s: key: %#x\n", __func__, key_serial(key));
 	down_read(&key->sem);
 	payload = key->payload.data[0];
-	rc = nvdimm->security_ops->unlock(nvdimm_bus, nvdimm,
-			(const void *)payload->data);
+	rc = nvdimm->security_ops->unlock(nvdimm,
+			(const struct nvdimm_key_data *)payload->data);
 	up_read(&key->sem);
 
 	if (rc == 0) {
@@ -377,7 +372,6 @@ int nvdimm_security_change_key(struct device *dev,
 		unsigned int old_keyid, unsigned int new_keyid)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
-	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
 	struct key *key, *old_key;
 	int rc;
 	void *old_data = NULL, *new_data;
@@ -441,7 +435,7 @@ int nvdimm_security_change_key(struct device *dev,
 
 	new_data = payload->data;
 
-	rc = nvdimm->security_ops->change_key(nvdimm_bus, nvdimm, old_data,
+	rc = nvdimm->security_ops->change_key(nvdimm, old_data,
 			new_data);
 	/* copy new payload to old payload */
 	if (rc == 0) {
