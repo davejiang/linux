@@ -389,11 +389,73 @@ static ssize_t available_slots_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(available_slots);
 
+#ifdef CONFIG_NVDIMM_SECURITY
+static ssize_t security_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct nvdimm *nvdimm = to_nvdimm(dev);
+
+	switch (nvdimm->state) {
+	case NVDIMM_SECURITY_DISABLED:
+		return sprintf(buf, "disabled\n");
+	case NVDIMM_SECURITY_UNLOCKED:
+		return sprintf(buf, "unlocked\n");
+	case NVDIMM_SECURITY_LOCKED:
+		return sprintf(buf, "locked\n");
+	case NVDIMM_SECURITY_FROZEN:
+		return sprintf(buf, "frozen\n");
+	case NVDIMM_SECURITY_UNSUPPORTED:
+	default:
+		return sprintf(buf, "unsupported\n");
+	}
+
+	return -ENOTTY;
+}
+
+#define SEC_CMD_SIZE 128
+static ssize_t security_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t len)
+
+{
+	struct nvdimm *nvdimm = to_nvdimm(dev);
+	struct nvdimm_bus *nvdimm_bus = walk_to_nvdimm_bus(dev);
+	ssize_t rc = -EINVAL;
+	unsigned int new_key = 0, old_key = 0;
+	char cmd[SEC_CMD_SIZE+1];
+
+	if (len > SEC_CMD_SIZE)
+		return -EINVAL;
+
+        wait_nvdimm_bus_probe_idle(&nvdimm_bus->dev);
+        if (atomic_read(&nvdimm->busy))
+                return -EBUSY;
+
+	rc = sscanf(buf, "%"__stringify(SEC_CMD_SIZE)"s %u %u",
+			cmd, &old_key, &new_key);
+	if (sysfs_streq(cmd, "update"))	{
+		if (rc != 3)
+			return -EINVAL;
+		dev_dbg(dev, "update %#x %#x\n", old_key, new_key);
+		rc = nvdimm_security_change_key(dev, old_key, new_key);
+	} else
+		return -EINVAL;
+
+	if (rc == 0)
+		rc = len;
+
+	return rc;
+}
+static DEVICE_ATTR_RW(security);
+#endif
+
 static struct attribute *nvdimm_attributes[] = {
 	&dev_attr_state.attr,
 	&dev_attr_flags.attr,
 	&dev_attr_commands.attr,
 	&dev_attr_available_slots.attr,
+#ifdef CONFIG_NVDIMM_SECURITY
+	&dev_attr_security.attr,
+#endif
 	NULL,
 };
 

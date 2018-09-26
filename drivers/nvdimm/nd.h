@@ -428,6 +428,8 @@ bool pmem_should_map_pages(struct device *dev);
 struct key *nvdimm_get_key(struct device *dev);
 int nvdimm_security_unlock_dimm(struct device *dev);
 int nvdimm_security_get_state(struct device *dev);
+int nvdimm_security_change_key(struct device *dev, unsigned int old_keyid,
+		unsigned int new_keyid);
 #else
 static inline struct key *nvdimm_get_key(struct device *dev)
 {
@@ -440,6 +442,12 @@ static inline int nvdimm_security_unlock_dimm(struct device *dev)
 }
 
 static inline int nvdimm_security_get_state(struct device *dev)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int nvdimm_security_change_key(struct device *dev,
+		unsigned int old_keyid, unsigned int new_keyid)
 {
 	return -EOPNOTSUPP;
 }
