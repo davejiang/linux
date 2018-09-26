@@ -174,6 +174,8 @@ struct nfit_memdev {
 	struct acpi_nfit_memory_map memdev[0];
 };
 
+#define NFIT_DIMM_ID_LEN	22
+
 /* assembled tables for a given dimm/memory-device */
 struct nfit_mem {
 	struct nvdimm *nvdimm;
@@ -196,6 +198,7 @@ struct nfit_mem {
 	int family;
 	bool has_lsr;
 	bool has_lsw;
+	char id[NFIT_DIMM_ID_LEN+1];
 };
 
 struct acpi_nfit_desc {
