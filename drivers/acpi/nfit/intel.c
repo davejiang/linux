@@ -358,7 +358,7 @@ static int intel_dimm_security_state(struct nvdimm *nvdimm,
 	return rc;
 }
 
-const struct nvdimm_security_ops intel_security_ops = {
+static const struct nvdimm_security_ops __intel_security_ops = {
 	.state = intel_dimm_security_state,
 	.unlock = intel_dimm_security_unlock,
 	.change_key = intel_dimm_security_update_passphrase,
@@ -366,3 +366,4 @@ const struct nvdimm_security_ops intel_security_ops = {
 	.freeze_lock = intel_dimm_security_freeze_lock,
 	.erase = intel_dimm_security_erase,
 };
+const struct nvdimm_security_ops *intel_security_ops = &__intel_security_ops;
