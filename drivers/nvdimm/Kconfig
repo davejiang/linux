@@ -112,4 +112,8 @@ config OF_PMEM
 
 	  Select Y if unsure.
 
+config NVDIMM_KEYS
+        def_bool y
+        depends on KEYS
+
 endif
