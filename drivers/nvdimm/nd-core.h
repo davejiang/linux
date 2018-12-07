@@ -60,6 +60,7 @@ int nvdimm_security_freeze(struct nvdimm *nvdimm);
 int nvdimm_security_disable(struct nvdimm *nvdimm, unsigned int keyid);
 int nvdimm_security_update(struct nvdimm *nvdimm, unsigned int keyid,
 		unsigned int new_keyid);
+int nvdimm_security_erase(struct nvdimm *nvdimm, unsigned int keyid);
 
 /**
  * struct blk_alloc_info - tracking info for BLK dpa scanning
