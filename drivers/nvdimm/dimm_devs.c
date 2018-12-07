@@ -569,6 +569,11 @@ int nvdimm_security_freeze(struct nvdimm *nvdimm)
 	if (nvdimm->sec.state < 0)
 		return -EIO;
 
+	if (test_bit(NDD_SECURITY_BUSY, &nvdimm->flags)) {
+		dev_warn(&nvdimm->dev, "Security operation in progress.\n");
+		return -EBUSY;
+	}
+
 	rc = nvdimm->sec.ops->freeze(nvdimm);
 	nvdimm->sec.state = nvdimm_security_state(nvdimm);
 

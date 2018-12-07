@@ -143,6 +143,11 @@ static int __nvdimm_security_unlock(struct nvdimm *nvdimm)
 			|| nvdimm->sec.state < 0)
 		return -EIO;
 
+	if (test_bit(NDD_SECURITY_BUSY, &nvdimm->flags)) {
+		dev_warn(dev, "Security operation in progress.\n");
+		return -EBUSY;
+	}
+
 	/*
 	 * If the pre-OS has unlocked the DIMM, attempt to send the key
 	 * from request_key() to the hardware for verification.  Failure
@@ -201,6 +206,11 @@ int nvdimm_security_disable(struct nvdimm *nvdimm, unsigned int keyid)
 		dev_warn(dev, "Incorrect security state: %d\n",
 				nvdimm->sec.state);
 		return -EIO;
+	}
+
+	if (test_bit(NDD_SECURITY_BUSY, &nvdimm->flags)) {
+		dev_warn(dev, "Security operation in progress.\n");
+		return -EBUSY;
 	}
 
 	key = nvdimm_lookup_user_key(nvdimm, keyid, NVDIMM_BASE_KEY);
@@ -286,6 +296,11 @@ int nvdimm_security_erase(struct nvdimm *nvdimm, unsigned int keyid)
 		dev_warn(dev, "Incorrect security state: %d\n",
 				nvdimm->sec.state);
 		return -EIO;
+	}
+
+	if (test_bit(NDD_SECURITY_BUSY, &nvdimm->flags)) {
+		dev_warn(dev, "Security operation in progress.\n");
+		return -EBUSY;
 	}
 
 	key = nvdimm_lookup_user_key(nvdimm, keyid, NVDIMM_BASE_KEY);
