@@ -394,8 +394,20 @@ static int child_unregister(struct device *dev, void *data)
 	 */
 	if (dev->class)
 		/* pass */;
-	else
+	else {
+		if (is_nvdimm(dev)) {
+			struct nvdimm *nvdimm = to_nvdimm(dev);
+
+			if (test_bit(NDD_SECURITY_OVERWRITE,
+						&nvdimm->flags)) {
+				clear_bit(NDD_SECURITY_OVERWRITE,
+						&nvdimm->flags);
+				cancel_delayed_work_sync(&nvdimm->dwork);
+				put_device(dev);
+			}
+		}
 		nd_device_unregister(dev, ND_SYNC);
+	}
 	return 0;
 }
 

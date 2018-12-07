@@ -40,6 +40,8 @@ enum {
 	NDD_LOCKED = 2,
 	/* memory under security wipes should not be accessed */
 	NDD_SECURITY_BUSY = 3,
+	/* state bit for overwrite query worker function */
+	NDD_SECURITY_OVERWRITE = 4,
 
 	/* need to set a limit somewhere, but yes, this is likely overkill */
 	ND_IOCTL_MAX_BUFLEN = SZ_4M,
@@ -184,6 +186,9 @@ struct nvdimm_security_ops {
 			const struct nvdimm_key_data *key_data);
 	int (*erase)(struct nvdimm *nvdimm,
 			const struct nvdimm_key_data *key_data);
+	int (*overwrite)(struct nvdimm *nvdimm,
+			const struct nvdimm_key_data *key_data);
+	int (*query_overwrite)(struct nvdimm *nvdimm);
 };
 
 void badrange_init(struct badrange *badrange);
@@ -221,6 +226,7 @@ static inline struct nvdimm *nvdimm_create(struct nvdimm_bus *nvdimm_bus,
 			cmd_mask, num_flush, flush_wpq, NULL, NULL);
 }
 
+int nvdimm_security_setup_events(struct nvdimm *nvdimm);
 const struct nd_cmd_desc *nd_cmd_dimm_desc(int cmd);
 const struct nd_cmd_desc *nd_cmd_bus_desc(int cmd);
 u32 nd_cmd_in_size(struct nvdimm *nvdimm, int cmd,

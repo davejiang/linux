@@ -201,6 +201,7 @@ static void nvdimm_release(struct device *dev)
 {
 	struct nvdimm *nvdimm = to_nvdimm(dev);
 
+	cancel_delayed_work_sync(&nvdimm->dwork);
 	ida_simple_remove(&dimm_ida, nvdimm->id);
 	kfree(nvdimm);
 }
@@ -395,7 +396,8 @@ static ssize_t security_show(struct device *dev,
 	C( OP_FREEZE,		"freeze",	1),	\
 	C( OP_DISABLE,		"disable",	2),	\
 	C( OP_UPDATE,		"update",	3),	\
-	C( OP_ERASE,		"erase",	2)
+	C( OP_ERASE,		"erase",	2),	\
+	C( OP_OVERWRITE,	"overwrite",	2)
 #undef C
 #define C(a, b, c) a
 enum nvdimmsec_op_ids { OPS };
@@ -452,6 +454,9 @@ static ssize_t __security_store(struct device *dev, const char *buf, size_t len)
 	} else if (i == OP_ERASE) {
 		dev_dbg(dev, "erase %u\n", key);
 		rc = nvdimm_security_erase(nvdimm, key);
+	} else if (i == OP_OVERWRITE) {
+		dev_dbg(dev, "overwrite %u\n", key);
+		rc = nvdimm_security_overwrite(nvdimm, key);
 	} else
 		return -EINVAL;
 
@@ -503,7 +508,8 @@ static umode_t nvdimm_visible(struct kobject *kobj, struct attribute *a, int n)
 	/* Are there any state mutation ops? */
 	if (nvdimm->sec.ops->freeze || nvdimm->sec.ops->disable
 			|| nvdimm->sec.ops->change_key
-			|| nvdimm->sec.ops->erase)
+			|| nvdimm->sec.ops->erase
+			|| nvdimm->sec.ops->overwrite)
 		return a->mode;
 	return 0444;
 }
@@ -546,6 +552,8 @@ struct nvdimm *__nvdimm_create(struct nvdimm_bus *nvdimm_bus,
 	dev->devt = MKDEV(nvdimm_major, nvdimm->id);
 	dev->groups = groups;
 	nvdimm->sec.ops = sec_ops;
+	nvdimm->sec.overwrite_tmo = 0;
+	INIT_DELAYED_WORK(&nvdimm->dwork, nvdimm_security_overwrite_query);
 	/*
 	 * Security state must be initialized before device_add() for
 	 * attribute visibility.
@@ -556,6 +564,16 @@ struct nvdimm *__nvdimm_create(struct nvdimm_bus *nvdimm_bus,
 	return nvdimm;
 }
 EXPORT_SYMBOL_GPL(__nvdimm_create);
+
+int nvdimm_security_setup_events(struct nvdimm *nvdimm)
+{
+	nvdimm->sec.overwrite_state = sysfs_get_dirent(nvdimm->dev.kobj.sd,
+			"security");
+	if (!nvdimm->sec.overwrite_state)
+		return -ENODEV;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(nvdimm_security_setup_events);
 
 int nvdimm_security_freeze(struct nvdimm *nvdimm)
 {

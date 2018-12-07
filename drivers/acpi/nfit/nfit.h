@@ -208,6 +208,7 @@ struct nfit_mem {
 	unsigned long flags;
 	u32 dirty_shutdown;
 	int family;
+	bool overwrite;
 };
 
 struct acpi_nfit_desc {
