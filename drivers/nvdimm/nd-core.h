@@ -58,6 +58,8 @@ static inline enum nvdimm_security_state nvdimm_security_state(
 }
 int nvdimm_security_freeze(struct nvdimm *nvdimm);
 int nvdimm_security_disable(struct nvdimm *nvdimm, unsigned int keyid);
+int nvdimm_security_update(struct nvdimm *nvdimm, unsigned int keyid,
+		unsigned int new_keyid);
 
 /**
  * struct blk_alloc_info - tracking info for BLK dpa scanning
