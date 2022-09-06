@@ -19155,6 +19155,7 @@ M:	Lukas Wunner <lukas@wunner.de>
 L:	linux-cxl@vger.kernel.org
 L:	linux-pci@vger.kernel.org
 S:	Maintained
+F:	drivers/pci/cma.c
 F:	include/linux/spdm.h
 F:	lib/spdm*
 

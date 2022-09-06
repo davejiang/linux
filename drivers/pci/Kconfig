@@ -116,6 +116,19 @@ config XEN_PCIDEV_FRONTEND
 config PCI_ATS
 	bool
 
+config PCI_CMA
+	bool "Component Measurement and Authentication (CMA-SPDM)"
+	select CRYPTO_ECDSA
+	select CRYPTO_RSA
+	select CRYPTO_SHA256
+	select CRYPTO_SHA512
+	select PCI_DOE
+	select SPDM_REQUESTER
+	help
+	  Authenticate devices on enumeration per PCIe r6.1 sec 6.31.
+	  A PCI DOE mailbox is used as transport for DMTF SPDM based
+	  attestation, measurement and secure channel establishment.
+
 config PCI_DOE
 	bool
 
