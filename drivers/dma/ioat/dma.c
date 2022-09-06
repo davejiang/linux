@@ -139,6 +139,7 @@ void ioat_stop(struct ioatdma_chan *ioat_chan)
 	int chan_id = chan_num(ioat_chan);
 	struct msix_entry *msix;
 
+	dev_info(to_dev(ioat_chan), "%s entered\n", __func__);
 	/* 1/ stop irq from firing tasklets
 	 * 2/ stop the tasklet from re-arming irqs
 	 */
@@ -160,12 +161,14 @@ void ioat_stop(struct ioatdma_chan *ioat_chan)
 
 	/* flush inflight timers */
 	del_timer_sync(&ioat_chan->timer);
+	dev_warn(to_dev(ioat_chan), "timer deleted!!!\n");
 
 	/* flush inflight tasklet runs */
 	tasklet_kill(&ioat_chan->cleanup_task);
 
 	/* final cleanup now that everything is quiesced and can't re-arm */
 	ioat_cleanup_event(&ioat_chan->cleanup_task);
+	dev_info(to_dev(ioat_chan), "%s exited\n", __func__);
 }
 
 static void __ioat_issue_pending(struct ioatdma_chan *ioat_chan)
@@ -252,6 +255,8 @@ static void __ioat_restart_chan(struct ioatdma_chan *ioat_chan)
 	ioat_chan->issued = ioat_chan->tail;
 	ioat_chan->dmacount = 0;
 	mod_timer(&ioat_chan->timer, jiffies + COMPLETION_TIMEOUT);
+	dev_info(to_dev(ioat_chan),
+		 "%s: mod_timer(COMPLETION_TIMEOUT)\n", __func__);
 
 	dev_dbg(to_dev(ioat_chan),
 		"%s: head: %#x tail: %#x issued: %#x count: %#x\n",
@@ -316,8 +321,11 @@ static dma_cookie_t ioat_tx_submit_unlock(struct dma_async_tx_descriptor *tx)
 	cookie = dma_cookie_assign(tx);
 	dev_dbg(to_dev(ioat_chan), "%s: cookie: %d\n", __func__, cookie);
 
-	if (!test_and_set_bit(IOAT_CHAN_ACTIVE, &ioat_chan->state))
+	if (!test_and_set_bit(IOAT_CHAN_ACTIVE, &ioat_chan->state)) {
 		mod_timer(&ioat_chan->timer, jiffies + COMPLETION_TIMEOUT);
+		dev_info(to_dev(ioat_chan),
+		 	 "%s: mod_timer(COMPLETION_TIMEOUT)\n", __func__);
+	}
 
 	/* make descriptor updates visible before advancing ioat->head,
 	 * this is purposefully not smp_wmb() since we are also
@@ -489,6 +497,8 @@ int ioat_check_space_lock(struct ioatdma_chan *ioat_chan, int num_descs)
 	if (time_is_before_jiffies(ioat_chan->timer.expires)
 	    && timer_pending(&ioat_chan->timer)) {
 		mod_timer(&ioat_chan->timer, jiffies + COMPLETION_TIMEOUT);
+		dev_info(to_dev(ioat_chan),
+		 	 "%s: mod_timer(COMPLETION_TIMEOUT)\n", __func__);
 		ioat_timer_event(&ioat_chan->timer);
 	}
 
@@ -549,6 +559,8 @@ static bool ioat_cleanup_preamble(struct ioatdma_chan *ioat_chan,
 
 	clear_bit(IOAT_COMPLETION_ACK, &ioat_chan->state);
 	mod_timer(&ioat_chan->timer, jiffies + COMPLETION_TIMEOUT);
+	dev_info(to_dev(ioat_chan),
+		 "%s: mod_timer(COMPLETION_TIMEOUT)\n", __func__);
 
 	return true;
 }
@@ -657,6 +669,8 @@ static void __cleanup(struct ioatdma_chan *ioat_chan, dma_addr_t phys_complete)
 		dev_dbg(to_dev(ioat_chan), "%s: cancel completion timeout\n",
 			__func__);
 		mod_timer_pending(&ioat_chan->timer, jiffies + IDLE_TIMEOUT);
+		dev_info(to_dev(ioat_chan),
+			 "%s: mod_timer(IDLE_TIMEOUT)\n", __func__);
 	}
 
 	/* microsecond delay by sysfs variable  per pending descriptor */
@@ -683,6 +697,8 @@ static void ioat_cleanup(struct ioatdma_chan *ioat_chan)
 		if (chanerr &
 		    (IOAT_CHANERR_HANDLE_MASK | IOAT_CHANERR_RECOVER_MASK)) {
 			mod_timer_pending(&ioat_chan->timer, jiffies + IDLE_TIMEOUT);
+			dev_info(to_dev(ioat_chan),
+				 "%s: mod_timer(IDLE_TIMEOUT)\n", __func__);
 			ioat_eh(ioat_chan);
 		}
 	}
@@ -875,11 +891,16 @@ static void check_active(struct ioatdma_chan *ioat_chan)
 {
 	if (ioat_ring_active(ioat_chan)) {
 		mod_timer(&ioat_chan->timer, jiffies + COMPLETION_TIMEOUT);
+		dev_info(to_dev(ioat_chan),
+			 "%s: mod_timer(COMPLETION_TIMEOUT)\n", __func__);
 		return;
 	}
 
-	if (test_and_clear_bit(IOAT_CHAN_ACTIVE, &ioat_chan->state))
+	if (test_and_clear_bit(IOAT_CHAN_ACTIVE, &ioat_chan->state)) {
 		mod_timer_pending(&ioat_chan->timer, jiffies + IDLE_TIMEOUT);
+		dev_info(to_dev(ioat_chan),
+			 "%s: mod_timer(IDLE_TIMEOUT)\n", __func__);
+	}
 }
 
 static void ioat_reboot_chan(struct ioatdma_chan *ioat_chan)
@@ -979,6 +1000,8 @@ void ioat_timer_event(struct timer_list *t)
 
 	set_bit(IOAT_COMPLETION_ACK, &ioat_chan->state);
 	mod_timer(&ioat_chan->timer, jiffies + COMPLETION_TIMEOUT);
+	dev_info(to_dev(ioat_chan),
+		 "%s: mod_timer(COMPLETION_TIMEOUT)\n", __func__);
 unlock_out:
 	spin_unlock_bh(&ioat_chan->cleanup_lock);
 }

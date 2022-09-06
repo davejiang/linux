@@ -257,6 +257,7 @@ static inline void ioat_suspend(struct ioatdma_chan *ioat_chan)
 {
 	u8 ver = ioat_chan->ioat_dma->version;
 
+	pr_info("calling %s\n", __func__);
 	writeb(IOAT_CHANCMD_SUSPEND,
 	       ioat_chan->reg_base + IOAT_CHANCMD_OFFSET(ver));
 }
@@ -265,6 +266,7 @@ static inline void ioat_reset(struct ioatdma_chan *ioat_chan)
 {
 	u8 ver = ioat_chan->ioat_dma->version;
 
+	pr_info("calling %s\n", __func__);
 	writeb(IOAT_CHANCMD_RESET,
 	       ioat_chan->reg_base + IOAT_CHANCMD_OFFSET(ver));
 }
@@ -274,6 +276,7 @@ static inline bool ioat_reset_pending(struct ioatdma_chan *ioat_chan)
 	u8 ver = ioat_chan->ioat_dma->version;
 	u8 cmd;
 
+	pr_info("calling %s\n", __func__);
 	cmd = readb(ioat_chan->reg_base + IOAT_CHANCMD_OFFSET(ver));
 	return (cmd & IOAT_CHANCMD_RESET) == IOAT_CHANCMD_RESET;
 }
