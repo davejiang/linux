@@ -87,6 +87,8 @@
  */
 
 #define SPDM_MEAS_SPEC_DMTF		BIT(0)
+#define SPDM_OPAQUE_DATA_FMT_VENDOR	BIT(0)
+#define SPDM_OPAQUE_DATA_FMT_GENERAL	BIT(1)
 
 #define SPDM_ASYM_RSASSA_2048		BIT(0)
 #define SPDM_ASYM_RSAPSS_2048		BIT(1)
@@ -118,6 +120,24 @@
 #define SPDM_MEAS_HASH_SHA3_512		BIT(6)
 #define SPDM_MEAS_HASH_SM3_257		BIT(7)
 
+#define SPDM_REQ_ALG_STRUCT_DHE		2
+#define SPDM_DHE_FFDHE_2048		BIT(0)
+#define SPDM_DHE_FFDHE_3072		BIT(1)
+#define SPDM_DHE_FFDHE_4096		BIT(2)
+#define SPDM_DHE_SECP_256R1		BIT(3)
+#define SPDM_DHE_SECP_384R1		BIT(4)
+#define SPDM_DHE_SECP_521R1		BIT(5)
+#define SPDM_DHE_SM2_P256		BIT(6)
+
+#define SPDM_REQ_ALG_STRUCT_AEAD	3
+#define SPDM_AEAD_AES_128_GCM		BIT(0)
+#define SPDM_AEAD_AES_256_GCM		BIT(1)
+#define SPDM_AEAD_CHACHA20_POLY1305	BIT(2)
+#define SPDM_AEAD_SM4_GCM		BIT(3)
+
+#define SPDM_REQ_ALG_STRUCT_KEY_SCHEDULE 5
+#define SPDM_KEY_SCHEDULE_SPDM		BIT(0)
+
 #if IS_ENABLED(CONFIG_CRYPTO_RSA)
 #define SPDM_ASYM_RSA			SPDM_ASYM_RSASSA_2048 |		\
 					SPDM_ASYM_RSASSA_3072 |		\
@@ -144,6 +164,14 @@
 
 #define SPDM_HASH_ALGOS		       (SPDM_HASH_SHA2_256		\
 					SPDM_HASH_SHA2_384_512 0)
+
+#define SPDM_DHE_ALGOS		       (SPDM_DHE_FFDHE_2048		| \
+					SPDM_DHE_FFDHE_3072		| \
+					SPDM_DHE_SECP_256R1		| \
+					SPDM_DHE_SECP_384R1)
+
+#define SPDM_AEAD_ALGOS		       (SPDM_AEAD_AES_256_GCM		| \
+					SPDM_AEAD_CHACHA20_POLY1305)
 
 /*
  * Common header shared by all messages.
@@ -779,15 +807,20 @@ static int spdm_parse_algs(struct spdm_state *spdm_state)
 	return 0;
 }
 
+/* Maximum number of ReqAlgStructs sent by this implementation */
+#define SPDM_MAX_REQ_ALG_STRUCT 3
+
 static int spdm_negotiate_algs(struct spdm_state *spdm_state,
 			       void *transcript, size_t transcript_sz)
 {
 	struct spdm_req_alg_struct *req_alg_struct;
 	struct spdm_negotiate_algs_req *req;
 	struct spdm_negotiate_algs_rsp *rsp;
-	size_t req_sz = sizeof(*req);
-	size_t rsp_sz = sizeof(*rsp);
-	int rc, length;
+	size_t req_sz, rsp_sz;
+	int rc, length, i = 0;
+
+	req_sz = sizeof(*req) +
+		 sizeof(*req_alg_struct) * SPDM_MAX_REQ_ALG_STRUCT;
 
 	/* Request length shall be <= 128 bytes (SPDM 1.1.0 margin no 185) */
 	BUILD_BUG_ON(req_sz > 128);
@@ -797,10 +830,35 @@ static int spdm_negotiate_algs(struct spdm_state *spdm_state,
 		return -ENOMEM;
 
 	req->code = SPDM_NEGOTIATE_ALGS;
-	req->length = cpu_to_le16(req_sz);
 	req->measurement_specification = SPDM_MEAS_SPEC_DMTF;
 	req->base_asym_algo = cpu_to_le32(SPDM_ASYM_ALGOS);
 	req->base_hash_algo = cpu_to_le32(SPDM_HASH_ALGOS);
+	if (spdm_state->version >= 0x12)
+		req->other_params_support = SPDM_OPAQUE_DATA_FMT_GENERAL;
+
+	req_alg_struct = (struct spdm_req_alg_struct *)(req + 1);
+	if (spdm_state->responder_caps & SPDM_KEY_EX_CAP) {
+		req_alg_struct[i++] = (struct spdm_req_alg_struct) {
+			.alg_type = SPDM_REQ_ALG_STRUCT_DHE,
+			.alg_count = 0x20,
+			.alg_supported = cpu_to_le16(SPDM_DHE_ALGOS),
+		};
+		req_alg_struct[i++] = (struct spdm_req_alg_struct) {
+			.alg_type = SPDM_REQ_ALG_STRUCT_AEAD,
+			.alg_count = 0x20,
+			.alg_supported = cpu_to_le16(SPDM_AEAD_ALGOS),
+		};
+		req_alg_struct[i++] = (struct spdm_req_alg_struct) {
+			.alg_type = SPDM_REQ_ALG_STRUCT_KEY_SCHEDULE,
+			.alg_count = 0x20,
+			.alg_supported = cpu_to_le16(SPDM_KEY_SCHEDULE_SPDM),
+		};
+	}
+	WARN_ON(i > SPDM_MAX_REQ_ALG_STRUCT);
+	req_sz = sizeof(*req) + i * sizeof(*req_alg_struct);
+	rsp_sz = sizeof(*rsp) + i * sizeof(*req_alg_struct);
+	req->length = cpu_to_le16(req_sz);
+	req->param1 = i;
 
 	rsp = kzalloc(rsp_sz, GFP_KERNEL);
 	if (!rsp) {
@@ -833,6 +891,7 @@ static int spdm_negotiate_algs(struct spdm_state *spdm_state,
 	    rsp->ext_asym_sel_count != 0 ||
 	    rsp->ext_hash_sel_count != 0 ||
 	    rsp->param1 > req->param1 ||
+	    rsp->other_params_sel != req->other_params_support ||
 	    (spdm_state->responder_caps & SPDM_MEAS_CAP_MASK &&
 	     (hweight32(spdm_state->measurement_hash_alg) != 1 ||
 	      rsp->measurement_specification_sel != SPDM_MEAS_SPEC_DMTF))) {
