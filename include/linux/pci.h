@@ -518,6 +518,7 @@ struct pci_dev {
 #endif
 #ifdef CONFIG_PCI_CMA
 	struct spdm_state *spdm_state;
+	unsigned int	cma_capable:1;
 #endif
 	u16		acs_cap;	/* ACS Capability offset */
 	phys_addr_t	rom;		/* Physical address if not from BAR */
