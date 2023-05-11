@@ -764,6 +764,9 @@ config ASN1_ENCODER
 config POLYNOMIAL
        tristate
 
+config FIRMWARE_TABLE
+	bool
+
 config SPDM_REQUESTER
 	tristate
 	select KEYS
