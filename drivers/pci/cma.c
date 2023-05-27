@@ -62,6 +62,7 @@ void pci_cma_init(struct pci_dev *pdev)
 	pdev->spdm_state = spdm_create(&pdev->dev, spdm_doe_transport, doe,
 				       PCI_DOE_MAX_PAYLOAD, cma_keyring);
 	if (!pdev->spdm_state) {
+		pdev->cma_init_failed = true;
 		return;
 	}
 

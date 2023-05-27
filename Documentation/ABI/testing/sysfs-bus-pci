@@ -500,3 +500,30 @@ Description:
 		console drivers from the device.  Raw users of pci-sysfs
 		resourceN attributes must be terminated prior to resizing.
 		Success of the resizing operation is not guaranteed.
+
+What:		/sys/bus/pci/devices/.../authenticated
+Date:		June 2023
+Contact:	Lukas Wunner <lukas@wunner.de>
+Description:
+		This file contains 1 if the device authenticated successfully
+		with CMA-SPDM (PCIe r6.1 sec 6.31).  It contains 0 if the
+		device failed authentication (and may thus be malicious).
+
+		Writing anything to this file causes reauthentication.
+		That may be opportune after updating the CMA keyring.
+
+		The file is not visible if authentication is unsupported
+		by the device.
+
+		If the kernel could not determine whether authentication is
+		supported because memory was low or DOE communication with
+		the device was not working, the file is visible but accessing
+		it fails with error code ENOTTY.
+
+		This prevents downgrade attacks where an attacker consumes
+		memory or disturbs DOE communication in order to create the
+		appearance that a device does not support authentication.
+
+		The reason why authentication support could not be determined
+		is apparent from "dmesg".  To probe for authentication support
+		again, exercise the "remove" and "rescan" attributes.

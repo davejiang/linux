@@ -686,6 +686,7 @@ void pci_doe_init(struct pci_dev *pdev)
 						      PCI_EXT_CAP_ID_DOE))) {
 		doe_mb = pci_doe_create_mb(pdev, offset);
 		if (IS_ERR(doe_mb)) {
+			pdev->doe_init_failed = true;
 			pci_err(pdev, "[%x] failed to create mailbox: %ld\n",
 				offset, PTR_ERR(doe_mb));
 			continue;
@@ -693,6 +694,7 @@ void pci_doe_init(struct pci_dev *pdev)
 
 		rc = xa_insert(&pdev->doe_mbs, offset, doe_mb, GFP_KERNEL);
 		if (rc) {
+			pdev->doe_init_failed = true;
 			pci_err(pdev, "[%x] failed to insert mailbox: %d\n",
 				offset, rc);
 			pci_doe_destroy_mb(doe_mb);

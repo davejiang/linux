@@ -129,6 +129,9 @@ config PCI_CMA
 	  A PCI DOE mailbox is used as transport for DMTF SPDM based
 	  attestation, measurement and secure channel establishment.
 
+config PCI_CMA_SYSFS
+	def_bool PCI_CMA && SYSFS
+
 config PCI_DOE
 	bool
 
