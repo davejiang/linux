@@ -485,10 +485,12 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 	if (ret)
 		goto out_power;
 
+	pci_cma_claim_ownership(pdev);
+
 	/* If reset fails because of the device lock, fail this path entirely */
 	ret = pci_try_reset_function(pdev);
 	if (ret == -EAGAIN)
-		goto out_disable_device;
+		goto out_cma_return;
 
 	vdev->reset_works = !ret;
 	pci_save_state(pdev);
@@ -547,7 +549,8 @@ out_free_zdev:
 out_free_state:
 	kfree(vdev->pci_saved_state);
 	vdev->pci_saved_state = NULL;
-out_disable_device:
+out_cma_return:
+	pci_cma_return_ownership(pdev);
 	pci_disable_device(pdev);
 out_power:
 	if (!disable_idle_d3)
@@ -675,6 +678,8 @@ out:
 	pci_disable_device(pdev);
 
 	vfio_pci_dev_set_try_reset(vdev->vdev.dev_set);
+
+	pci_cma_return_ownership(pdev);
 
 	/* Put the pm-runtime usage counter acquired during enable */
 	if (!disable_idle_d3)

@@ -381,6 +381,7 @@ static inline bool pci_dev_is_disconnected(const struct pci_dev *dev)
 #define PCI_DPC_RECOVERED 1
 #define PCI_DPC_RECOVERING 2
 #define PCI_CMA_AUTHENTICATED 3
+#define PCI_CMA_OWNED_BY_GUEST 4
 
 static inline void pci_dev_assign_added(struct pci_dev *dev, bool added)
 {

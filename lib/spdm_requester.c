@@ -1372,6 +1372,17 @@ struct spdm_state *spdm_create(struct device *dev, spdm_transport *transport,
 EXPORT_SYMBOL_GPL(spdm_create);
 
 /**
+ * spdm_await() - Wait for ongoing spdm_authenticate() to finish
+ *
+ * @spdm_state: SPDM session state
+ */
+void spdm_await(struct spdm_state *spdm_state)
+{
+	mutex_lock(&spdm_state->lock);
+	mutex_unlock(&spdm_state->lock);
+}
+
+/**
  * spdm_destroy() - Destroy SPDM session
  *
  * @spdm_state: SPDM session state

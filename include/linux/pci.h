@@ -2352,6 +2352,14 @@ static inline resource_size_t pci_iov_resource_size(struct pci_dev *dev, int res
 static inline void pci_vf_drivers_autoprobe(struct pci_dev *dev, bool probe) { }
 #endif
 
+#ifdef CONFIG_PCI_CMA
+void pci_cma_claim_ownership(struct pci_dev *pdev);
+void pci_cma_return_ownership(struct pci_dev *pdev);
+#else
+static inline void pci_cma_claim_ownership(struct pci_dev *pdev) { }
+static inline void pci_cma_return_ownership(struct pci_dev *pdev) { }
+#endif
+
 #if defined(CONFIG_HOTPLUG_PCI) || defined(CONFIG_HOTPLUG_PCI_MODULE)
 void pci_hp_create_module_link(struct pci_slot *pci_slot);
 void pci_hp_remove_module_link(struct pci_slot *pci_slot);

@@ -82,10 +82,51 @@ int pci_cma_reauthenticate(struct pci_dev *pdev)
 	if (!pdev->cma_capable)
 		return -ENOTTY;
 
+	if (test_bit(PCI_CMA_OWNED_BY_GUEST, &pdev->priv_flags))
+		return -EPERM;
+
 	rc = spdm_authenticate(pdev->spdm_state);
 	assign_bit(PCI_CMA_AUTHENTICATED, &pdev->priv_flags, !rc);
 	return rc;
 }
+
+#if IS_ENABLED(CONFIG_VFIO_PCI_CORE)
+/**
+ * pci_cma_claim_ownership() - Claim exclusive CMA-SPDM control for guest VM
+ * @pdev: PCI device
+ *
+ * Claim exclusive CMA-SPDM control for a guest virtual machine before
+ * passthrough of @pdev.  The host refrains from performing CMA-SPDM
+ * authentication of the device until passthrough has concluded.
+ *
+ * Necessary because the GET_VERSION request resets the SPDM connection
+ * and DOE r1.0 allows only a single SPDM connection for the entire system.
+ * So the host could reset the guest's SPDM connection behind the guest's back.
+ */
+void pci_cma_claim_ownership(struct pci_dev *pdev)
+{
+	set_bit(PCI_CMA_OWNED_BY_GUEST, &pdev->priv_flags);
+
+	if (pdev->cma_capable)
+		spdm_await(pdev->spdm_state);
+}
+EXPORT_SYMBOL(pci_cma_claim_ownership);
+
+/**
+ * pci_cma_return_ownership() - Relinquish CMA-SPDM control to the host
+ * @pdev: PCI device
+ *
+ * Relinquish CMA-SPDM control to the host after passthrough of @pdev to a
+ * guest virtual machine has concluded.
+ */
+void pci_cma_return_ownership(struct pci_dev *pdev)
+{
+	clear_bit(PCI_CMA_OWNED_BY_GUEST, &pdev->priv_flags);
+
+	pci_cma_reauthenticate(pdev);
+}
+EXPORT_SYMBOL(pci_cma_return_ownership);
+#endif
 
 void pci_cma_destroy(struct pci_dev *pdev)
 {
