@@ -233,6 +233,19 @@ int __init_or_acpilib
 acpi_table_parse_cedt(enum acpi_cedt_type id,
 		      acpi_tbl_entry_handler_arg handler_arg, void *arg);
 
+#ifdef CONFIG_ACPI_KEYP
+int __init_or_acpilib
+acpi_table_parse_keyp(enum acpi_keyp_type id,
+		      acpi_tbl_entry_handler_arg handler_arg, void *arg);
+#else
+static inline int acpi_table_parse_keyp(enum acpi_keyp_type id,
+					acpi_tbl_entry_handler_arg handler_arg,
+					void *arg)
+{
+	return -EOPNOTSUPP;
+}
+#endif
+
 int acpi_parse_mcfg (struct acpi_table_header *header);
 void acpi_table_print_madt_entry (struct acpi_subtable_header *madt);
 

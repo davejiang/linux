@@ -595,6 +595,15 @@ config ACPI_PRMT
 	  substantially increase computational overhead related to the
 	  initialization of some server systems.
 
+config ACPI_KEYP
+	bool "ACPI KEYP Table Support for Integrity and Data Encryption (IDE)"
+	depends on X86_64 && PCI_IDE
+	default y
+	help
+	  Platform KEYP table support for IDE stream creation.
+
+	  Say Y to enable on platforms support KEYP tables.
+
 endif	# ACPI
 
 config X86_PM_TIMER
