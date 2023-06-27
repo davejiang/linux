@@ -237,6 +237,10 @@ acpi_table_parse_cedt(enum acpi_cedt_type id,
 int __init_or_acpilib
 acpi_table_parse_keyp(enum acpi_keyp_type id,
 		      acpi_tbl_entry_handler_arg handler_arg, void *arg);
+int __init_or_acpilib keyp_init(void);
+void __init_or_acpilib keyp_inc_ref(struct pci_dev *pdev);
+void __init_or_acpilib keyp_dec_ref(struct pci_dev *pdev);
+void __init_or_acpilib keyp_setup_pcie_ide_stream(struct pci_dev *pdev);
 #else
 static inline int acpi_table_parse_keyp(enum acpi_keyp_type id,
 					acpi_tbl_entry_handler_arg handler_arg,
@@ -244,6 +248,15 @@ static inline int acpi_table_parse_keyp(enum acpi_keyp_type id,
 {
 	return -EOPNOTSUPP;
 }
+
+static inline int keyp_init(void)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void keyp_inc_ref(struct pci_dev *pdev) {}
+static inline void keyp_dec_ref(struct pci_dev *pdev) {}
+static inline void keyp_setup_pcie_ide_stream(struct pci_dev *pdev) {}
 #endif
 
 int acpi_parse_mcfg (struct acpi_table_header *header);

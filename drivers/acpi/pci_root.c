@@ -652,6 +652,7 @@ static int acpi_pci_root_add(struct acpi_device *device,
 	int no_aspm = 0;
 	bool hotadd = system_state == SYSTEM_RUNNING;
 	const char *acpi_hid;
+	struct pci_dev *pdev;
 
 	root = kzalloc(sizeof(struct acpi_pci_root), GFP_KERNEL);
 	if (!root)
@@ -762,6 +763,22 @@ static int acpi_pci_root_add(struct acpi_device *device,
 		acpi_ioapic_add(root->device->handle);
 	}
 
+	/*
+	 * Grab a reference to the KEYP config unit so when the root ports are being
+	 * released, the KEYP config unit can also be released.
+	 */
+	pdev = NULL;
+	for_each_pci_dev(pdev) {
+		if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ENDPOINT ||
+		    pci_pcie_type(pdev) == PCI_EXP_TYPE_RC_END)
+			keyp_inc_ref(pdev);
+	}
+
+	for_each_pci_bridge(pdev, root->bus) {
+		if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT)
+			keyp_setup_pcie_ide_stream(pdev);
+	}
+
 	pci_lock_rescan_remove();
 	pci_bus_add_devices(root->bus);
 	pci_unlock_rescan_remove();
@@ -778,6 +795,7 @@ end:
 static void acpi_pci_root_remove(struct acpi_device *device)
 {
 	struct acpi_pci_root *root = acpi_driver_data(device);
+	struct pci_dev *pdev;
 
 	pci_lock_rescan_remove();
 
@@ -793,6 +811,13 @@ static void acpi_pci_root_remove(struct acpi_device *device)
 	dmar_device_remove(device->handle);
 
 	pci_unlock_rescan_remove();
+
+	pdev = NULL;
+	for_each_pci_dev(pdev) {
+		if (pci_pcie_type(pdev) == PCI_EXP_TYPE_ENDPOINT ||
+		    pci_pcie_type(pdev) == PCI_EXP_TYPE_RC_END)
+			keyp_dec_ref(pdev);
+	}
 
 	kfree(root);
 }
@@ -1080,6 +1105,7 @@ void __init acpi_pci_root_init(void)
 	if (acpi_pci_disabled)
 		return;
 
+	keyp_init();
 	pci_acpi_crs_quirks();
 	acpi_scan_add_handler_with_hotplug(&pci_root_handler, "pci_root");
 }
