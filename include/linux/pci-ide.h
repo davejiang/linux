@@ -38,6 +38,7 @@ enum stream_direction {
 #define IDE_KEY_SIZE		32
 #define IDE_IV_SIZE		8
 #define IDE_NUM_SUBSTREAMS	3
+#define IDE_STREAM_STATUS_DELAY	10	/* 10ms */
 
 struct key_package {
 	u8 key[KEY_SLOT_MAX][IDE_KEY_SIZE];
