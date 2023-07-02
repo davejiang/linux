@@ -105,7 +105,8 @@ software_key_determine_akcipher(const struct public_key *pkey,
 			return -EINVAL;
 		*sig = false;
 	} else if (strncmp(pkey->pkey_algo, "ecdsa", 5) == 0) {
-		if (strcmp(encoding, "x962") != 0)
+		if (strcmp(encoding, "x962") != 0 &&
+		    strcmp(encoding, "p1363") != 0)
 			return -EINVAL;
 		/*
 		 * ECDSA signatures are taken over a raw hash, so they don't
@@ -246,7 +247,10 @@ static int software_key_query(const struct kernel_pkey_params *params,
 		 * which is actually 2 'key_size'-bit integers encoded in
 		 * ASN.1.  Account for the ASN.1 encoding overhead here.
 		 */
-		info->max_sig_size = 2 * (len + 3) + 2;
+		if (strcmp(params->encoding, "x962") == 0)
+			info->max_sig_size = 2 * (len + 3) + 2;
+		else if (strcmp(params->encoding, "p1363") == 0)
+			info->max_sig_size = 2 * len;
 	} else {
 		info->max_data_size = len;
 		info->max_sig_size = len;

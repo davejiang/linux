@@ -159,10 +159,20 @@ static int ecdsa_verify(struct akcipher_request *req)
 		sg_nents_for_len(req->src, req->src_len + req->dst_len),
 		buffer, req->src_len + req->dst_len, 0);
 
-	ret = asn1_ber_decoder(&ecdsasignature_decoder, &sig_ctx,
-			       buffer, req->src_len);
-	if (ret < 0)
+	if (strcmp(req->enc, "x962") == 0) {
+		ret = asn1_ber_decoder(&ecdsasignature_decoder, &sig_ctx,
+				       buffer, req->src_len);
+		if (ret < 0)
+			goto error;
+	} else if (strcmp(req->enc, "p1363") == 0 &&
+		   req->src_len == 2 * keylen) {
+		ecc_swap_digits(buffer, sig_ctx.r, ctx->curve->g.ndigits);
+		ecc_swap_digits(buffer + keylen,
+					sig_ctx.s, ctx->curve->g.ndigits);
+	} else {
+		ret = -EINVAL;
 		goto error;
+	}
 
 	/* if the hash is shorter then we will add leading zeros to fit to ndigits */
 	diff = keylen - req->dst_len;
