@@ -41,6 +41,7 @@ struct crypto_akcipher_sync_data {
 	void *dst;
 	unsigned int slen;
 	unsigned int dlen;
+	const char* enc;
 
 	struct akcipher_request *req;
 	struct crypto_wait cwait;

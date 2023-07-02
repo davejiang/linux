@@ -4154,11 +4154,12 @@ static int test_akcipher_one(struct crypto_akcipher *tfm,
 			goto free_all;
 		memcpy(xbuf[1], c, c_size);
 		sg_set_buf(&src_tab[2], xbuf[1], c_size);
-		akcipher_request_set_crypt(req, src_tab, NULL, m_size, c_size);
+		akcipher_request_set_crypt(req, src_tab, NULL, m_size, c_size,
+					   vecs->enc);
 	} else {
 		sg_init_one(&dst, outbuf_enc, out_len_max);
 		akcipher_request_set_crypt(req, src_tab, &dst, m_size,
-					   out_len_max);
+					   out_len_max, NULL);
 	}
 	akcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
 				      crypto_req_done, &wait);
@@ -4217,7 +4218,8 @@ static int test_akcipher_one(struct crypto_akcipher *tfm,
 	sg_init_one(&src, xbuf[0], c_size);
 	sg_init_one(&dst, outbuf_dec, out_len_max);
 	crypto_init_wait(&wait);
-	akcipher_request_set_crypt(req, &src, &dst, c_size, out_len_max);
+	akcipher_request_set_crypt(req, &src, &dst, c_size, out_len_max,
+				   vecs->enc);
 
 	err = crypto_wait_req(vecs->siggen_sigver_test ?
 			      /* Run asymmetric signature generation */

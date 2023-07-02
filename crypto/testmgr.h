@@ -160,6 +160,7 @@ struct akcipher_testvec {
 	bool public_key_vec;
 	bool siggen_sigver_test;
 	enum OID algo;
+	const char *enc;
 };
 
 struct kpp_testvec {

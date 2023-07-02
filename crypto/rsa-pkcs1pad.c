@@ -262,7 +262,8 @@ static int pkcs1pad_encrypt(struct akcipher_request *req)
 
 	/* Reuse output buffer */
 	akcipher_request_set_crypt(&req_ctx->child_req, req_ctx->in_sg,
-				   req->dst, ctx->key_size - 1, req->dst_len);
+				   req->dst, ctx->key_size - 1, req->dst_len,
+				   NULL);
 
 	err = crypto_akcipher_encrypt(&req_ctx->child_req);
 	if (err != -EINPROGRESS && err != -EBUSY)
@@ -362,7 +363,7 @@ static int pkcs1pad_decrypt(struct akcipher_request *req)
 	/* Reuse input buffer, output to a new buffer */
 	akcipher_request_set_crypt(&req_ctx->child_req, req->src,
 				   req_ctx->out_sg, req->src_len,
-				   ctx->key_size);
+				   ctx->key_size, NULL);
 
 	err = crypto_akcipher_decrypt(&req_ctx->child_req);
 	if (err != -EINPROGRESS && err != -EBUSY)
@@ -419,7 +420,8 @@ static int pkcs1pad_sign(struct akcipher_request *req)
 
 	/* Reuse output buffer */
 	akcipher_request_set_crypt(&req_ctx->child_req, req_ctx->in_sg,
-				   req->dst, ctx->key_size - 1, req->dst_len);
+				   req->dst, ctx->key_size - 1, req->dst_len,
+				   req->enc);
 
 	err = crypto_akcipher_decrypt(&req_ctx->child_req);
 	if (err != -EINPROGRESS && err != -EBUSY)
@@ -551,7 +553,8 @@ static int pkcs1pad_verify(struct akcipher_request *req)
 
 	/* Reuse input buffer, output to a new buffer */
 	akcipher_request_set_crypt(&req_ctx->child_req, req->src,
-				   req_ctx->out_sg, sig_size, ctx->key_size);
+				   req_ctx->out_sg, sig_size, ctx->key_size,
+				   req->enc);
 
 	err = crypto_akcipher_encrypt(&req_ctx->child_req);
 	if (err != -EINPROGRESS && err != -EBUSY)

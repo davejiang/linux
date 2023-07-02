@@ -354,7 +354,7 @@ static int software_key_eds_op(struct kernel_pkey_params *params,
 		if (!issig)
 			break;
 		ret = crypto_sig_sign(sig, in, params->in_len,
-				      out, params->out_len);
+				      out, params->out_len, params->encoding);
 		break;
 	default:
 		BUG();
@@ -438,7 +438,7 @@ int public_key_verify_signature(const struct public_key *pkey,
 		goto error_free_key;
 
 	ret = crypto_sig_verify(tfm, sig->s, sig->s_size,
-				sig->digest, sig->digest_size);
+				sig->digest, sig->digest_size, sig->encoding);
 
 error_free_key:
 	kfree(key);

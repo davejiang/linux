@@ -81,12 +81,13 @@ int crypto_sig_maxsize(struct crypto_sig *tfm);
  * @slen:	source length
  * @dst:	destinatino obuffer
  * @dlen:	destination length
+ * @enc:	signature encoding
  *
  * Return: zero on success; error code in case of error
  */
 int crypto_sig_sign(struct crypto_sig *tfm,
 		    const void *src, unsigned int slen,
-		    void *dst, unsigned int dlen);
+		    void *dst, unsigned int dlen, const char *enc);
 
 /**
  * crypto_sig_verify() - Invoke signature verification
@@ -99,12 +100,13 @@ int crypto_sig_sign(struct crypto_sig *tfm,
  * @slen:	source length
  * @digest:	digest
  * @dlen:	digest length
+ * @enc:	signature encoding
  *
  * Return: zero on verification success; error code in case of error.
  */
 int crypto_sig_verify(struct crypto_sig *tfm,
 		      const void *src, unsigned int slen,
-		      const void *digest, unsigned int dlen);
+		      const void *digest, unsigned int dlen, const char *enc);
 
 /**
  * crypto_sig_set_pubkey() - Invoke set public key operation

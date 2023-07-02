@@ -30,6 +30,8 @@
  *		In case of error where the dst sgl size was insufficient,
  *		it will be updated to the size required for the operation.
  *		For verify op this is size of digest part in @src.
+ * @enc:	For verify op it's the encoding of the signature part of @src.
+ *		For sign op it's the encoding of the signature in @dst.
  * @__ctx:	Start of private context data
  */
 struct akcipher_request {
@@ -38,6 +40,7 @@ struct akcipher_request {
 	struct scatterlist *dst;
 	unsigned int src_len;
 	unsigned int dst_len;
+	const char *enc;
 	void *__ctx[] CRYPTO_MINALIGN_ATTR;
 };
 
@@ -272,17 +275,22 @@ static inline void akcipher_request_set_callback(struct akcipher_request *req,
  * @src_len:	size of the src input scatter list to be processed
  * @dst_len:	size of the dst output scatter list or size of signature
  *		portion in @src for verify op
+ * @enc:	encoding of signature portion in @src for verify op,
+ *		encoding of signature in @dst for sign op,
+ *		NULL for encrypt and decrypt op
  */
 static inline void akcipher_request_set_crypt(struct akcipher_request *req,
 					      struct scatterlist *src,
 					      struct scatterlist *dst,
 					      unsigned int src_len,
-					      unsigned int dst_len)
+					      unsigned int dst_len,
+					      const char *enc)
 {
 	req->src = src;
 	req->dst = dst;
 	req->src_len = src_len;
 	req->dst_len = dst_len;
+	req->enc = enc;
 }
 
 /**

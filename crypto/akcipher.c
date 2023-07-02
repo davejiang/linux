@@ -221,7 +221,7 @@ int crypto_akcipher_sync_prep(struct crypto_akcipher_sync_data *data)
 	sg = &data->sg;
 	sg_init_one(sg, buf, mlen);
 	akcipher_request_set_crypt(req, sg, data->dst ? sg : NULL,
-				   data->slen, data->dlen);
+				   data->slen, data->dlen, data->enc);
 
 	crypto_init_wait(&data->cwait);
 	akcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_SLEEP,
