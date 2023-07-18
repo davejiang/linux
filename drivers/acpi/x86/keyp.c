@@ -16,6 +16,7 @@
 
 static struct workqueue_struct *keyp_wq;
 
+#define KEYP_STM_KEY_REFRESH_TIME	30
 #define KEYP_STM_CAP_SIZE		4
 #define KEYP_STM_CONFIG_SIZE		36
 
@@ -43,6 +44,7 @@ struct stream {
 	enum key_set_index keyset;			/* current key set */
 	enum key_slot_state key_slot_state;
 	struct delayed_work dwork;
+	struct delayed_work key_refresh_dwork;
 };
 
 struct keyp_config_unit {
@@ -564,6 +566,8 @@ static int keyp_stream_setup(struct keyp_config_unit *kcu,
 	 * the key slots.
 	 */
 	queue_delayed_work(keyp_wq, &stm->dwork, msecs_to_jiffies(100));
+	queue_delayed_work(keyp_wq, &stm->key_refresh_dwork,
+			   msecs_to_jiffies(KEYP_STM_KEY_REFRESH_TIME) * 1000);
 
 	return 0;
 
@@ -642,6 +646,7 @@ static void keyp_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
 	ide_km_disable_keyset(pdev2, pdev2->ide.stream_id, stm->keyset,
 			      IDE_STREAM_RX);
 
+	cancel_delayed_work_sync(&stm->key_refresh_dwork);
 	cancel_delayed_work_sync(&stm->dwork);
 
 	if (stm->key_slot_state != KEY_SLOT_STATE_CLEAR) {
@@ -670,6 +675,64 @@ static const struct pci_ide_ops keyp_ide_ops = {
 	.stream_create = keyp_stream_create,
 	.stream_shutdown = keyp_stream_shutdown,
 };
+
+static void keyp_stream_key_refresh(struct work_struct *work)
+{
+	struct stream *stm = container_of(work, struct stream, dwork.work);
+	struct key_package *pkg __free(keyset_free) = ide_km_keyset_alloc();
+	int keyset = next_keyset(stm->keyset);
+	struct pci_dev *pdev;
+	int stream_id, rc;
+
+	if (!pkg)
+		return;
+
+	guard(mutex)(&stm->lock);
+	stream_id = stm->dsd->ide.stream_id;
+	pdev = stm->dsd;
+	guard(mutex)(&pdev->ide.lock);
+
+	rc = keyp_write_keys(stm, pkg, keyset);
+	if (rc)
+		return;
+
+	rc = keyp_prime_key(stm, pkg, keyset, IDE_STREAM_RX);
+	if (rc)
+		return;
+
+	rc = keyp_prime_key(stm, pkg, keyset, IDE_STREAM_TX);
+	if (rc)
+		return;
+
+	/* Distribute keys to EP as next set */
+	rc = ide_km_set_keyset(pdev, stream_id, keyset, pkg,
+			       IDE_DEV_DOWNSTREAM);
+	if (rc)
+		return;
+
+	/* Inform the EP Rx to switch to next keyset */
+	rc = ide_km_enable_keyset(pdev, stream_id, keyset, IDE_STREAM_RX);
+	if (rc) {
+		dev_dbg(&pdev->dev, "Refresh keyset failed to activate.\n");
+		return;
+	}
+
+	/* Trigger RP Tx to use new key */
+	keyp_select_key(stm, keyset);
+
+	/* Inform the EP Tx to switch to next keyset */
+	rc = ide_km_enable_keyset(pdev, stream_id, keyset, IDE_STREAM_TX);
+	if (rc) {
+		dev_dbg(&pdev->dev, "Refresh keyset failed to activate.\n");
+		return;
+	}
+
+	stm->keyset = keyset;
+	pdev->ide.keyset = keyset;
+
+	queue_delayed_work(keyp_wq, &stm->key_refresh_dwork,
+			   msecs_to_jiffies(KEYP_STM_KEY_REFRESH_TIME) * 1000);
+}
 
 void keyp_setup_pcie_ide_stream(struct pci_dev *pdev)
 {
@@ -844,6 +907,7 @@ static int keyp_config_unit_handler(union acpi_subtable_headers *header,
 		set_key_slots(stm->key_slots, KEY_SLOT_INVALID);
 		mutex_init(&stm->lock);
 		INIT_DELAYED_WORK(&stm->dwork, keyp_keys_validate_and_free);
+		INIT_DELAYED_WORK(&stm->key_refresh_dwork, keyp_stream_key_refresh);
 	}
 
 	for (i = 0; i < rp_count; i++) {
