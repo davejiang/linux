@@ -135,6 +135,13 @@ config PCI_CMA_SYSFS
 config PCI_DOE
 	bool
 
+config PCI_IDE
+	bool "PCI IDE support"
+	select PCI_CMA
+	help
+	  Integrity and Data Enccryption (IDE) provides confidentiality, integrity,
+	  and replay protection for TLPs transmitted and received between two ports.
+
 config PCI_ECAM
 	bool
 

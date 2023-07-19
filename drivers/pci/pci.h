@@ -795,6 +795,19 @@ static inline pci_power_t mid_pci_get_power_state(struct pci_dev *pdev)
 }
 #endif
 
+#ifdef CONFIG_PCI_IDE
+void pci_ide_init(struct pci_dev *pdev);
+void pci_ide_release(struct pci_dev *pdev);
+#else
+static inline void pci_ide_init(struct pci_dev *pdev)
+{
+}
+
+static inline void pci_ide_release(struct pci_dev *pdev)
+{
+}
+#endif
+
 /*
  * Config Address for PCI Configuration Mechanism #1
  *

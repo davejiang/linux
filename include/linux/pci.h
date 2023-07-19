@@ -319,6 +319,51 @@ struct pci_sriov;
 struct pci_p2pdma;
 struct rcec_ea;
 
+enum pci_ide_stream_type {
+	PCI_IDE_STREAM_TYPE_NONE = -1,
+	PCI_IDE_STREAM_TYPE_LINK = 0,
+	PCI_IDE_STREAM_TYPE_SELECTIVE = 1,
+};
+
+#ifdef CONFIG_PCI_IDE
+int pcie_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
+			   struct pci_dev *ep, enum pci_ide_stream_type type);
+void pcie_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
+			      struct pci_dev *ep, enum pci_ide_stream_type type);
+
+struct pci_ide_ops {
+	int (*stream_create)(struct pci_dev *pdev1, struct pci_dev *pdev2,
+			     struct pci_dev *ep, enum pci_ide_stream_type type);
+	void (*stream_shutdown)(struct pci_dev *pdev1, struct pci_dev *pdev2,
+				struct pci_dev *ep, enum pci_ide_stream_type type);
+};
+
+struct pci_ide {
+	struct mutex			lock;
+	unsigned int			link_num;
+	unsigned int			select_num;
+	struct ida			stream_pos_ids;
+	struct ida			stream_ids;
+	int				stream_min;
+	int				stream_max;
+	const struct pci_ide_ops	*ops;
+	enum pci_ide_stream_type	stream_type;
+	unsigned int			secure:1;
+};
+#else
+static inline int pcie_ide_stream_create(struct pci_dev *pdev1,
+					 struct pci_dev *pdev2,
+					 enum pci_ide_stream_type type)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void pcie_ide_stream_shutdown(struct pci_dev *pdev1,
+					    struct pci_dev *pdev2)
+{
+}
+#endif /* CONFIG_PCI_IDE */
+
 /* The pci_dev structure describes PCI devices */
 struct pci_dev {
 	struct list_head bus_list;	/* Node in per-bus list */
@@ -535,6 +580,10 @@ struct pci_dev {
 
 	/* These methods index pci_reset_fn_methods[] */
 	u8 reset_methods[PCI_NUM_RESET_METHODS]; /* In priority order */
+#ifdef CONFIG_PCI_IDE
+	unsigned int	ide_support:1;
+	struct pci_ide	ide;
+#endif
 };
 
 static inline struct pci_dev *pci_physfn(struct pci_dev *dev)
