@@ -1157,6 +1157,9 @@
 #define  PCI_IDE_LNK_CTRL_TC		0x00380000	/* TC */
 #define  PCI_IDE_LNK_CTRL_STREAM_ID	0xFF000000	/* Stream ID */
 #define PCI_IDE_LNK_STATUS	0x04
+#define  PCI_IDE_STM_STATUS_MASK	GENMASK(3, 0)	/* Status mask for LNK or SEL */
+#define  PCI_IDE_STM_STATUS_UNSECURE	0x00000000	/* Unsecure status */
+#define  PCI_IDE_STM_STATUS_SECURE	0x00000002	/* Secure status */
 /* IDE Selective IDE Register Block */
 #define PCI_IDE_SEL_CAP		0x00
 #define  PCI_IDE_SEL_CAP_NUM_ASSOC_BLK	0x0000000F	/* Address Association Register Blocks */
@@ -1187,5 +1190,9 @@
 #define  PCI_IDE_ADDR_ASSOC2_MEM_LIMIT_UPPER	0xFFFFFFFF	/* Memory Limit Upper */
 #define PCI_IDE_ADDR_ASSOC3	0x08
 #define  PCI_IDE_ADDR_ASSOC3_MEM_BASE_UPPER	0xFFFFFFFF	/* Memory Base Upper */
+
+#define PCI_IDE_LNK_REG_BLOCK_SIZE		(8)
+#define PCI_IDE_ADDR_ASSOC_REG_BLOCK_SIZE	(12)
+#define PCI_IDE_ADDR_ASSOC_REG_BLOCK_OFFSET	(PCI_IDE_RID_ASSOC2 + 4)
 
 #endif /* LINUX_PCI_REGS_H */

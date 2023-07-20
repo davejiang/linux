@@ -325,7 +325,36 @@ enum pci_ide_stream_type {
 	PCI_IDE_STREAM_TYPE_SELECTIVE = 1,
 };
 
+enum pci_ide_stream_algorithm {
+	PCI_IDE_ALGO_AES_GCM_256_96B_MAC = 0,
+};
+
+enum pci_ide_stream_key_set_sel {
+	PCI_IDE_KEY_SET_0 = 0,
+	PCI_IDE_KEY_SET_1 = 1,
+	PCI_IDE_KEY_SET_NUM,
+};
+
+enum pci_ide_stream_sub_stream {
+	PCI_IDE_SUB_STREAM_PR = 0,
+	PCI_IDE_SUB_STREAM_NPR = 1,
+	PCI_IDE_SUB_STREAM_CPL = 2,
+	PCI_IDE_SUB_STREAM_NUM,
+};
+
+enum pci_ide_sub_stream_direction {
+	PCI_IDE_SUB_STREAM_DIRECTION_RX = 0,
+	PCI_IDE_SUB_STREAM_DIRECTION_TX = 1,
+	PCI_IDE_SUB_STREAM_DIRECTION_NUM,
+};
+
+enum pci_ide_stream_state {
+	PCI_IDE_STREAM_STATE_INSECURE = 0,
+	PCI_IDE_STREAM_STATE_SECURE = 2,
+};
+
 #ifdef CONFIG_PCI_IDE
+
 int pcie_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 			   struct pci_dev *ep, enum pci_ide_stream_type type);
 void pcie_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
@@ -347,8 +376,13 @@ struct pci_ide {
 	int				stream_min;
 	int				stream_max;
 	const struct pci_ide_ops	*ops;
+
 	enum pci_ide_stream_type	stream_type;
 	unsigned int			secure:1;
+	int				pdev1_stream_pos_id;
+	int				pdev2_stream_pos_id;
+	int				stream_id;
+	int				keyset;
 };
 #else
 static inline int pcie_ide_stream_create(struct pci_dev *pdev1,
@@ -363,6 +397,15 @@ static inline void pcie_ide_stream_shutdown(struct pci_dev *pdev1,
 {
 }
 #endif /* CONFIG_PCI_IDE */
+
+int pci_ide_stream_setup(struct pci_dev *pdev1, struct pci_dev *pdev2,
+			 enum pci_ide_stream_type type);
+int pci_ide_stream_enable(struct pci_dev *pdev1, struct pci_dev *pdev2,
+			  enum pci_ide_stream_type type);
+int pci_ide_stream_disable(struct pci_dev *pdev1, struct pci_dev *pdev2,
+			   enum pci_ide_stream_type type);
+void pci_ide_stream_release(struct pci_dev *pdev1, struct pci_dev *pdev2);
+bool ide_stream_is_secure(struct pci_dev *pdev, bool wait);
 
 /* The pci_dev structure describes PCI devices */
 struct pci_dev {
