@@ -604,8 +604,71 @@ static int keyp_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 	return keyp_stream_setup(kcu, pdev1, ep, type);
 }
 
+static void keyp_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
+				 struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+	u16 segment = pci_domain_nr(ep->bus);
+	u32 index = construct_xa_key(segment, ep->bus->number, ep->devfn);
+	struct keyp_config_unit *kcu;
+	struct stream *stm;
+	bool found = false;
+	int i;
+
+	/* Stream traffic is expected to be quiesced */
+	/* PCIe stream termination */
+	kcu = xa_load(&keyp_xa, index);
+	if (!kcu)
+		return;
+
+	for (i = 0; i < kcu->stream_id_claimed; i++) {
+		stm = &kcu->streams[i];
+		mutex_lock(&stm->lock);
+		if (stm->dsd == ep) {
+			found = true;
+			break;
+		}
+		mutex_unlock(&stm->lock);
+	}
+
+	if (!found) {
+		dev_dbg(&pdev1->dev, "Active stream not found!\n");
+		return;
+	}
+
+	guard(mutex)(&pdev1->ide.lock);
+	guard(mutex)(&pdev2->ide.lock);
+	ide_km_disable_keyset(pdev2, pdev2->ide.stream_id, stm->keyset,
+			      IDE_STREAM_TX);
+	ide_km_disable_keyset(pdev2, pdev2->ide.stream_id, stm->keyset,
+			      IDE_STREAM_RX);
+
+	cancel_delayed_work_sync(&stm->dwork);
+
+	if (stm->key_slot_state != KEY_SLOT_STATE_CLEAR) {
+		keyp_clear_keys(stm);
+		keyp_keys_free(stm);
+		stm->key_slot_state = KEY_SLOT_STATE_CLEAR;
+	}
+
+	pci_ide_stream_disable(pdev1, ep, PCI_IDE_STREAM_TYPE_SELECTIVE);
+	keyp_stream_control(stm, false);
+
+	/*
+	 * No need to write random values to key slots. This is done by the delayed
+	 * workqueue.
+	 */
+
+	stream_pos_id_put(kcu, stm->pos_id);
+	stm->dsd = NULL;
+	mutex_unlock(&stm->lock);
+	pci_ide_stream_release(pdev1, ep);
+	pdev2->ide.stream_type = PCI_IDE_STREAM_TYPE_NONE;
+	pdev2->ide.secure = false;
+}
+
 static const struct pci_ide_ops keyp_ide_ops = {
 	.stream_create = keyp_stream_create,
+	.stream_shutdown = keyp_stream_shutdown,
 };
 
 void keyp_setup_pcie_ide_stream(struct pci_dev *pdev)
@@ -629,6 +692,7 @@ void keyp_setup_pcie_ide_stream(struct pci_dev *pdev)
 	pdev->ide.stream_min = kcu->stream_id_claimed;
 	pdev->ide.stream_max = kcu->stream_id_claimed + max_rp_streams - 1;
 	kcu->stream_id_claimed += max_rp_streams;
+	pdev->ide.ops = &keyp_ide_ops;
 }
 EXPORT_SYMBOL_GPL(keyp_setup_pcie_ide_stream);
 
