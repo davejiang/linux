@@ -1145,6 +1145,7 @@
 #define  PCI_IDE_CAP_LNK_NUM	0x0000E000	/* Number of TCs Supported for Link IDE */
 #define  PCI_IDE_CAP_SEL_NUM	0x00FF0000	/* Number of Selective IDE Streams Supported */
 #define PCI_IDE_CTRL		0x08
+#define  PCI_IDE_CTRL_FLOWTH	BIT(2)
 /* IDE Link IDE Register Block */
 #define PCI_IDE_LNK_CTRL	0x00
 #define  PCI_IDE_LNK_CTRL_ENABLE	0x00000001	/* Link IDE Stream Enable */

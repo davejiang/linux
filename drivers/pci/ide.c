@@ -155,6 +155,121 @@ err:
 }
 EXPORT_SYMBOL_GPL(pcie_ide_stream_create);
 
+
+static int pcie_ep_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
+				     struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+	/* Unless this is a P2P stream setup, there's nothing to do */
+	return 0;
+}
+
+static void pcie_ep_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
+					struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+}
+
+static const struct pci_ide_ops pcie_ep_ide_ops = {
+	.stream_create = pcie_ep_ide_stream_create,
+	.stream_shutdown = pcie_ep_ide_stream_shutdown,
+};
+
+static int pcie_usp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
+				      struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+	u32 ctrl;
+	int pos;
+
+	guard(mutex)(&pdev1->ide.lock);
+	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
+		pos = pci_find_ext_capability(pdev1, PCI_EXT_CAP_ID_IDE);
+		if (!pos)
+			return pos;
+
+		if (is_pci_endpoint(pdev1))
+			return -EINVAL;
+
+		/* Set Flow-Through IDE Stream Enabled */
+		ctrl = PCI_IDE_CTRL_FLOWTH;
+		pci_write_config_dword(pdev1, pos + PCI_IDE_CTRL, ctrl);
+
+		return 0;
+	}
+
+	return 0;
+}
+
+static void pcie_usp_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
+					 struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+	int pos;
+
+	guard(mutex)(&pdev1->ide.lock);
+	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
+		pos = pci_find_ext_capability(pdev1, PCI_EXT_CAP_ID_IDE);
+		if (!pos)
+			return;
+
+		if (is_pci_endpoint(pdev1))
+			return;
+
+		/* Clear Flow-Through IDE Stream Enabled */
+		pci_write_config_dword(pdev1, pos + PCI_IDE_CTRL, 0);
+	}
+}
+
+static const struct pci_ide_ops pcie_usp_ide_ops = {
+	.stream_create = pcie_usp_ide_stream_create,
+	.stream_shutdown = pcie_usp_ide_stream_shutdown,
+};
+
+static int pcie_dsp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
+				      struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+	u32 ctrl;
+	int pos;
+
+	guard(mutex)(&pdev1->ide.lock);
+	/* Unsupported for now */
+	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
+		pos = pci_find_ext_capability(pdev1, PCI_EXT_CAP_ID_IDE);
+		if (!pos)
+			return pos;
+
+		/* Set Flow-Through IDE Stream Enabled */
+		ctrl = PCI_IDE_CTRL_FLOWTH;
+		pci_write_config_dword(pdev1, pos + PCI_IDE_CTRL, ctrl);
+
+		return 0;
+	}
+
+	/* TODO: Link IDE setup */
+	return 0;
+}
+
+static void pcie_dsp_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
+					 struct pci_dev *ep, enum pci_ide_stream_type type)
+{
+	int pos;
+
+	guard(mutex)(&pdev1->ide.lock);
+	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
+		pos = pci_find_ext_capability(pdev1, PCI_EXT_CAP_ID_IDE);
+		if (!pos)
+			return;
+
+		/* Clear Flow-Through IDE Stream Enabled */
+		pci_write_config_dword(pdev1, pos + PCI_IDE_CTRL, 0);
+		return;
+	}
+
+	/* TODO: Link IDE shutdown */
+}
+
+static const struct pci_ide_ops pcie_dsp_ide_ops = {
+	.stream_create = pcie_dsp_ide_stream_create,
+	.stream_shutdown = pcie_dsp_ide_stream_shutdown,
+};
+
 void pci_ide_init(struct pci_dev *pdev)
 {
 	int link_num = 0, select_num = 0, pos;
@@ -190,6 +305,22 @@ void pci_ide_init(struct pci_dev *pdev)
 	/* No CMA established, just exit */
 	if (!test_bit(PCI_CMA_AUTHENTICATED, &pdev->priv_flags))
 		return;
+
+
+	switch (pci_pcie_type(pdev)) {
+	case PCI_EXP_TYPE_DOWNSTREAM:
+		pdev->ide.ops = &pcie_dsp_ide_ops;
+		break;
+	case PCI_EXP_TYPE_UPSTREAM:
+		pdev->ide.ops = &pcie_usp_ide_ops;
+		break;
+	case PCI_EXP_TYPE_ENDPOINT:
+	case PCI_EXP_TYPE_RC_END:
+		pdev->ide.ops = &pcie_ep_ide_ops;
+		break;
+	default:	/* Do nothing, RP should be already set */
+		break;
+	}
 
 	if (is_pci_endpoint(pdev)) {
 		struct pci_dev *rp = pcie_find_root_port(pdev);
