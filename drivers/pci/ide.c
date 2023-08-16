@@ -2,8 +2,26 @@
 
 #include <linux/bitfield.h>
 #include <linux/pci.h>
+#include <linux/pci-ide.h>
+#include <linux/cleanup.h>
 #include <linux/delay.h>
 #include "pci.h"
+
+static int pci_ide_get_reg_block_pos(struct pci_dev *pdev, int id);
+
+static int pcie_ide_link_stream_validate(struct pci_dev *pdev1,
+					 struct pci_dev *pdev2,
+					 enum pci_ide_stream_type type)
+{
+	if ((pci_pcie_type(pdev1) == PCI_EXP_TYPE_ROOT_PORT ||
+	     pci_pcie_type(pdev1) == PCI_EXP_TYPE_DOWNSTREAM) &&
+	    (pci_pcie_type(pdev2) != PCI_EXP_TYPE_ENDPOINT ||
+	     pci_pcie_type(pdev2) != PCI_EXP_TYPE_RC_END ||
+	     pci_pcie_type(pdev2) != PCI_EXP_TYPE_UPSTREAM))
+		return -EINVAL;
+
+	return 0;
+}
 
 /*
  * The verification function assumes the devices are passed in with pdev1
@@ -40,6 +58,13 @@ static int pcie_ide_stream_validate(struct pci_dev *pdev1, struct pci_dev *pdev2
 	if (pci_pcie_type(pdev2) == PCI_EXP_TYPE_ROOT_PORT ||
 	    pci_pcie_type(pdev2) == PCI_EXP_TYPE_DOWNSTREAM)
 		return -EINVAL;
+
+	if (type == PCI_IDE_STREAM_TYPE_LINK) {
+		int rc = pcie_ide_link_stream_validate(pdev1, pdev2, type);
+
+		if (rc)
+			return -EINVAL;
+	}
 
 	return 0;
 }
@@ -114,10 +139,6 @@ int pcie_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 	struct pci_dev *itr, *prev;
 	struct device *parent_dev;
 	int rc;
-
-	/* Reject now until support is implemented */
-	if (type == PCI_IDE_STREAM_TYPE_LINK)
-		return -EOPNOTSUPP;
 
 	/* Reject p2p until support is implemented */
 	if (is_stream_p2p(pdev1, pdev2))
@@ -223,14 +244,14 @@ static const struct pci_ide_ops pcie_usp_ide_ops = {
 	.stream_shutdown = pcie_usp_ide_stream_shutdown,
 };
 
+DEFINE_FREE(keyset_free, struct key_package *, if (_T) ide_km_keyset_free(_T))
 static int pcie_dsp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 				      struct pci_dev *ep, enum pci_ide_stream_type type)
 {
+	int pos, stream_id, keyset, rc;
 	u32 ctrl;
-	int pos;
 
 	guard(mutex)(&pdev1->ide.lock);
-	/* Unsupported for now */
 	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
 		pos = pci_find_ext_capability(pdev1, PCI_EXT_CAP_ID_IDE);
 		if (!pos)
@@ -243,14 +264,86 @@ static int pcie_dsp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pde
 		return 0;
 	}
 
-	/* TODO: Link IDE setup */
+	guard(mutex)(&pdev2->ide.lock);
+	rc = pci_ide_stream_setup(pdev1, pdev2, type);
+	if (rc)
+		return rc;
+
+	struct key_package *pkg __free(keyset_free) = ide_km_keyset_alloc();
+
+	if (!pkg)
+		return -ENOMEM;
+
+	stream_id = ep->ide.stream_id;
+	keyset = pdev2->ide.keyset;
+
+	rc = ide_km_send_query(pdev1);
+	if (rc)
+		return rc;
+
+	rc = ide_km_send_query(pdev2);
+	if (rc)
+		return rc;
+
+	rc = ide_km_set_keyset(pdev1, stream_id, keyset, pkg,
+			       IDE_DEV_UPSTREAM);
+	if (rc)
+		return rc;
+
+	rc = ide_km_set_keyset(pdev2, stream_id, keyset, pkg,
+			       IDE_DEV_DOWNSTREAM);
+	if (rc)
+		return rc;
+
+	rc = ide_km_enable_keyset(pdev1, stream_id, keyset, IDE_STREAM_RX);
+	if (rc)
+		return rc;
+
+	rc = ide_km_enable_keyset(pdev2, stream_id, keyset, IDE_STREAM_RX);
+	if (rc)
+		goto pdev2_rx_keyerr;
+
+	rc = ide_km_enable_keyset(pdev1, stream_id, keyset, IDE_STREAM_TX);
+	if (rc)
+		goto pdev1_tx_keyerr;
+
+	rc = ide_km_enable_keyset(pdev2, stream_id, keyset, IDE_STREAM_TX);
+	if (rc)
+		goto pdev2_tx_keyerr;
+
+	rc = pci_ide_stream_enable(pdev1, pdev2, type);
+	if (rc)
+		goto stream_en_err;
+
+	if (!ide_stream_is_secure(pdev2, true)) {
+		rc = -ENXIO;
+		goto stream_err;
+	}
+
+	pdev2->ide.stream_type = type;
+	pdev2->ide.secure = true;
+
+	/* TODO: need key refresh */
+
 	return 0;
+
+stream_err:
+	pci_ide_stream_disable(pdev1, pdev2, type);
+stream_en_err:
+	ide_km_disable_keyset(pdev2, stream_id, keyset, IDE_STREAM_TX);
+pdev2_tx_keyerr:
+	ide_km_disable_keyset(pdev1, stream_id, keyset, IDE_STREAM_TX);
+pdev1_tx_keyerr:
+	ide_km_disable_keyset(pdev2, stream_id, keyset, IDE_STREAM_RX);
+pdev2_rx_keyerr:
+	ide_km_disable_keyset(pdev1, stream_id, keyset, IDE_STREAM_RX);
+	return rc;
 }
 
 static void pcie_dsp_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
 					 struct pci_dev *ep, enum pci_ide_stream_type type)
 {
-	int pos;
+	int pos, stream_id, keyset;
 
 	guard(mutex)(&pdev1->ide.lock);
 	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
@@ -263,7 +356,16 @@ static void pcie_dsp_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *
 		return;
 	}
 
-	/* TODO: Link IDE shutdown */
+	guard(mutex)(&pdev2->ide.lock);
+	stream_id = ep->ide.stream_id;
+	keyset = pdev2->ide.keyset;
+	ide_km_disable_keyset(pdev1, stream_id, keyset, IDE_STREAM_TX);
+	ide_km_disable_keyset(pdev2, stream_id, keyset, IDE_STREAM_TX);
+	ide_km_disable_keyset(pdev1, stream_id, keyset, IDE_STREAM_RX);
+	ide_km_disable_keyset(pdev2, stream_id, keyset, IDE_STREAM_RX);
+	pci_ide_stream_disable(pdev1, pdev2, PCI_IDE_STREAM_TYPE_LINK);
+	pdev2->ide.stream_type = PCI_IDE_STREAM_TYPE_NONE;
+	pdev2->ide.secure = false;
 }
 
 static const struct pci_ide_ops pcie_dsp_ide_ops = {
@@ -441,6 +543,16 @@ bool ide_stream_is_secure(struct pci_dev *pdev, bool wait)
 }
 EXPORT_SYMBOL_GPL(ide_stream_is_secure);
 
+static void pci_ide_config_link_stream(struct pci_dev *pdev, int pos, int stream_id)
+{
+	u32 reg;
+
+	reg = FIELD_PREP(PCI_IDE_LNK_CTRL_STREAM_ID, stream_id) |
+	      FIELD_PREP(PCI_IDE_LNK_CTRL_ALGO,
+			 PCI_IDE_ALGO_AES_GCM_256_96B_MAC) |
+	pci_write_config_dword(pdev, pos + PCI_IDE_LNK_CTRL, reg);
+}
+
 /**
  * pci_ide_stream_setup - Setup the PCIe IDE config registers
  * @pdev1: the first PCI device of the IDE stream
@@ -461,21 +573,16 @@ int pci_ide_stream_setup(struct pci_dev *pdev1, struct pci_dev *pdev2,
 
 	lockdep_assert_held(&pdev1->ide.lock);
 	lockdep_assert_held(&pdev2->ide.lock);
-	/*
-	 * No link stream support yet
-	 */
-	if (type == PCI_IDE_STREAM_TYPE_LINK)
-		return -EINVAL;
 
 	rc = pcie_ide_stream_validate(pdev1, pdev2, type);
 	if (rc)
 		return -EINVAL;
 
-	pdev1_id = pci_ide_id_alloc(pdev1, PCI_IDE_STREAM_TYPE_SELECTIVE);
+	pdev1_id = pci_ide_id_alloc(pdev1, type);
 	if (pdev1_id < 0)
 		return pdev1_id;
 
-	pdev2_id = pci_ide_id_alloc(pdev2, PCI_IDE_STREAM_TYPE_SELECTIVE);
+	pdev2_id = pci_ide_id_alloc(pdev2, type);
 	if (pdev2_id < 0) {
 		rc = pdev2_id;
 		goto pdev2_id_alloc_err;
@@ -499,8 +606,13 @@ int pci_ide_stream_setup(struct pci_dev *pdev1, struct pci_dev *pdev2,
 		goto stm_id_err;
 	}
 
-	pci_ide_config_sel_stream_rp(pdev1, pdev1_stm_pos, stream_id);
-	pci_ide_config_sel_stream_ep(pdev2, pdev2_stm_pos, stream_id);
+	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE) {
+		pci_ide_config_sel_stream_rp(pdev1, pdev1_stm_pos, stream_id);
+		pci_ide_config_sel_stream_ep(pdev2, pdev2_stm_pos, stream_id);
+	} else {
+		pci_ide_config_link_stream(pdev1, pdev1_stm_pos, stream_id);
+		pci_ide_config_link_stream(pdev2, pdev2_stm_pos, stream_id);
+	}
 
 	/*
 	 * The IDs are stored in the endpoint pci_dev only because only 1
