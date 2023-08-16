@@ -588,12 +588,6 @@ static int keyp_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 	u32 index = construct_xa_key(segment, ep->bus->number, ep->devfn);
 	struct keyp_config_unit *kcu;
 
-	/*
-	 * No link stream support yet.
-	 */
-	if (type != PCI_IDE_STREAM_TYPE_SELECTIVE)
-		return -EOPNOTSUPP;
-
 	if (pci_pcie_type(pdev1) != PCI_EXP_TYPE_ROOT_PORT)
 		return -EINVAL;
 
@@ -605,7 +599,10 @@ static int keyp_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 	if (!kcu)
 		return -ENODEV;
 
-	return keyp_stream_setup(kcu, pdev1, ep, type);
+	if (type == PCI_IDE_STREAM_TYPE_SELECTIVE)
+		return keyp_stream_setup(kcu, pdev1, ep, type);
+
+	return keyp_stream_setup(kcu, pdev1, pdev2, type);
 }
 
 static void keyp_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *pdev2,
