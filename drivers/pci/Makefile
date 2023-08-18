@@ -34,7 +34,7 @@ obj-$(CONFIG_VGA_ARB)		+= vgaarb.o
 obj-$(CONFIG_PCI_DOE)		+= doe.o
 obj-$(CONFIG_PCI_CMA)		+= cma.o
 obj-$(CONFIG_PCI_CMA_SYSFS)	+= cma-sysfs.o
-obj-$(CONFIG_PCI_IDE)		+= ide.o
+obj-$(CONFIG_PCI_IDE)		+= ide.o ide-km.o
 
 # Endpoint library must be initialized before its users
 obj-$(CONFIG_PCI_ENDPOINT)	+= endpoint/
