@@ -111,6 +111,41 @@ struct km_k_gostop_ack {
 	struct km_key_context k;
 };
 
+struct key_package *ide_km_keyset_alloc(void)
+{
+	struct key_package *pkg;
+	int i;
+
+	pkg = kzalloc(sizeof(*pkg), GFP_KERNEL);
+	if (!pkg)
+		return NULL;
+
+	for (i = 0; i < KEY_SLOT_MAX; i++) {
+		while (get_random_bytes_wait(pkg->key[i], IDE_KEY_SIZE));
+
+		/*
+		 * PCIe Base Spec 6.0.1 6.33.5 IDE TLP Sub-Streams
+		 * IV contains value of a counter, initially set to the value of 0x1h
+		 * for each sub-stream upon establishment of the stream and each time
+		 * the sub-stream key is refreshed. Incremented every time an IV is
+		 * consumed.
+		 */
+		pkg->iv[i][0] = 1;
+	}
+
+	return pkg;
+}
+EXPORT_SYMBOL_GPL(ide_km_keyset_alloc);
+
+void ide_km_keyset_free(struct key_package *pkg)
+{
+	if (!pkg)
+		return;
+
+	memset(pkg, 0, sizeof(*pkg));
+	kfree(pkg);
+}
+EXPORT_SYMBOL_GPL(ide_km_keyset_free);
 
 int ide_km_send_query(struct pci_dev *pdev)
 {

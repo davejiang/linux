@@ -57,4 +57,7 @@ int ide_km_enable_keyset(struct pci_dev *pdev, int stream_id, int keyset,
 void ide_km_disable_keyset(struct pci_dev *pdev, int stream_id, int keyset,
 			   enum stream_direction dir);
 
+struct key_package *ide_km_keyset_alloc(void);
+void ide_km_keyset_free(struct key_package *pkg);
+
 #endif
