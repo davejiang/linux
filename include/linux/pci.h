@@ -383,6 +383,7 @@ struct pci_ide {
 	int				pdev2_stream_pos_id;
 	int				stream_id;
 	int				keyset;
+	struct delayed_work		dwork;
 };
 #else
 static inline int pcie_ide_stream_create(struct pci_dev *pdev1,

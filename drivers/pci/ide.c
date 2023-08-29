@@ -5,6 +5,7 @@
 #include <linux/pci-ide.h>
 #include <linux/cleanup.h>
 #include <linux/delay.h>
+#include <linux/workqueue.h>
 #include "pci.h"
 
 static int pci_ide_get_reg_block_pos(struct pci_dev *pdev, int id);
@@ -195,6 +196,53 @@ static const struct pci_ide_ops pcie_ep_ide_ops = {
 	.stream_shutdown = pcie_ep_ide_stream_shutdown,
 };
 
+DEFINE_FREE(keyset_free, struct key_package *, if (_T) ide_km_keyset_free(_T))
+static void pcie_usp_ide_stream_key_refresh(struct work_struct *work)
+{
+	struct pci_ide *ide = container_of(work, struct pci_ide, dwork.work);
+	struct pci_dev *pdev2 = container_of(ide, struct pci_dev, ide);
+	struct pci_dev *pdev1 = to_pci_dev(pdev2->dev.parent);
+	struct key_package *pkg __free(keyset_free) = ide_km_keyset_alloc();
+	int keyset, rc, stream_id;
+
+	if (!pkg)
+		return;
+
+	guard(mutex)(&pdev1->ide.lock);
+	guard(mutex)(&pdev2->ide.lock);
+
+	keyset = next_keyset(pdev2->ide.keyset);
+	stream_id = pdev2->ide.stream_id;
+
+	rc = ide_km_set_keyset(pdev1, stream_id, keyset, pkg, IDE_DEV_UPSTREAM);
+	if (rc)
+		return;
+
+	rc = ide_km_set_keyset(pdev2, stream_id, keyset, pkg, IDE_DEV_DOWNSTREAM);
+	if (rc)
+		return;
+
+	rc = ide_km_enable_keyset(pdev1, stream_id, keyset, IDE_STREAM_RX);
+	if (rc)
+		return;
+
+	rc = ide_km_enable_keyset(pdev2, stream_id, keyset, IDE_STREAM_RX);
+	if (rc)
+		return;
+
+	rc = ide_km_enable_keyset(pdev1, stream_id, keyset, IDE_STREAM_TX);
+	if (rc)
+		return;
+
+	rc = ide_km_enable_keyset(pdev2, stream_id, keyset, IDE_STREAM_TX);
+	if (rc)
+		return;
+
+	pdev2->ide.keyset = keyset;
+
+	queue_delayed_work(system_wq, &pdev2->ide.dwork, msecs_to_jiffies(30) * 1000);
+}
+
 static int pcie_usp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 				      struct pci_dev *ep, enum pci_ide_stream_type type)
 {
@@ -244,7 +292,6 @@ static const struct pci_ide_ops pcie_usp_ide_ops = {
 	.stream_shutdown = pcie_usp_ide_stream_shutdown,
 };
 
-DEFINE_FREE(keyset_free, struct key_package *, if (_T) ide_km_keyset_free(_T))
 static int pcie_dsp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pdev2,
 				      struct pci_dev *ep, enum pci_ide_stream_type type)
 {
@@ -323,7 +370,7 @@ static int pcie_dsp_ide_stream_create(struct pci_dev *pdev1, struct pci_dev *pde
 	pdev2->ide.stream_type = type;
 	pdev2->ide.secure = true;
 
-	/* TODO: need key refresh */
+	queue_delayed_work(system_wq, &pdev2->ide.dwork, msecs_to_jiffies(30) * 1000);
 
 	return 0;
 
@@ -359,6 +406,9 @@ static void pcie_dsp_ide_stream_shutdown(struct pci_dev *pdev1, struct pci_dev *
 	guard(mutex)(&pdev2->ide.lock);
 	stream_id = ep->ide.stream_id;
 	keyset = pdev2->ide.keyset;
+
+	cancel_delayed_work_sync(&pdev2->ide.dwork);
+
 	ide_km_disable_keyset(pdev1, stream_id, keyset, IDE_STREAM_TX);
 	ide_km_disable_keyset(pdev2, stream_id, keyset, IDE_STREAM_TX);
 	ide_km_disable_keyset(pdev1, stream_id, keyset, IDE_STREAM_RX);
@@ -777,6 +827,7 @@ void pci_ide_init(struct pci_dev *pdev)
 		break;
 	case PCI_EXP_TYPE_UPSTREAM:
 		pdev->ide.ops = &pcie_usp_ide_ops;
+		INIT_DELAYED_WORK(&pdev->ide.dwork, pcie_usp_ide_stream_key_refresh);
 		break;
 	case PCI_EXP_TYPE_ENDPOINT:
 	case PCI_EXP_TYPE_RC_END:
