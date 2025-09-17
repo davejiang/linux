@@ -88,6 +88,7 @@ void __cxl_uport_init_ras_reporting(struct cxl_port *port,
 int __cxl_await_media_ready(struct cxl_dev_state *cxlds);
 resource_size_t __cxl_rcd_component_reg_phys(struct device *dev,
 					     struct cxl_dport *dport);
+void cxl_unmask_proto_interrupts(struct device *dev);
 #else
 static inline pci_ers_result_t cxl_pci_error_detected(struct pci_dev *pdev,
 						      pci_channel_state_t state)
@@ -98,6 +99,9 @@ static inline void devm_cxl_dport_ras_setup(struct cxl_dport *dport)
 {
 }
 static inline void devm_cxl_port_ras_setup(struct cxl_port *port)
+{
+}
+static inline void cxl_unmask_proto_interrupts(struct device *dev)
 {
 }
 #endif
