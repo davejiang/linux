@@ -48,6 +48,7 @@ void cxl_forward_error(struct pci_dev *pdev, struct aer_err_info *info)
 	};
 
 	guard(rwsem_read)(&cxl_proto_err_kfifo.rw_sema);
+	pci_dev_get(pdev);
 	if (!cxl_proto_err_kfifo.work || !kfifo_put(&cxl_proto_err_kfifo.fifo, wd)) {
 		dev_err_ratelimited(&pdev->dev, "AER-CXL kfifo error");
 		return;
