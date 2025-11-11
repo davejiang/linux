@@ -267,8 +267,10 @@ void cxl_handle_cor_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 	void __iomem *addr;
 	u32 status;
 
-	if (!ras_base)
+	if (!ras_base) {
+		dev_warn_once(dev, "CXL RAS register block is not mapped");
 		return;
+	}
 
 	addr = ras_base + CXL_RAS_CORRECTABLE_STATUS_OFFSET;
 	status = readl(addr);
@@ -345,7 +347,30 @@ pci_ers_result_t cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ra
 
 static void cxl_port_cor_error_detected(struct device *dev)
 {
-	cxl_handle_cor_ras(dev, 0, cxl_get_ras_base(dev));
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
+	u64 serial = 0;
+
+	if (is_cxl_endpoint(port)) {
+		struct cxl_memdev *cxlmd = to_cxl_memdev(port->uport_dev);
+		struct cxl_dev_state *cxlds = cxlmd->cxlds;
+
+		guard(device)(&cxlmd->dev);
+
+		if (!dev->driver) {
+			dev_warn(&pdev->dev,
+				 "%s: memdev disabled, abort error handling\n",
+				 dev_name(dev));
+			return;
+		}
+
+		if (cxlds->rcd)
+			cxl_handle_rdport_errors(cxlds);
+
+		serial = cxlds->serial;
+	}
+
+	cxl_handle_cor_ras(dev, serial, cxl_get_ras_base(dev));
 }
 
 static pci_ers_result_t cxl_port_error_detected(struct device *dev)
@@ -376,28 +401,15 @@ static pci_ers_result_t cxl_port_error_detected(struct device *dev)
 	return cxl_handle_ras(dev, serial, cxl_get_ras_base(dev));
 }
 
-void cxl_cor_error_detected(struct pci_dev *pdev)
+void cxl_pci_cor_error_detected(struct pci_dev *pdev)
 {
-	struct cxl_dev_state *cxlds = pci_get_drvdata(pdev);
-	struct cxl_memdev *cxlmd = cxlds->cxlmd;
-	struct device *dev = &cxlds->cxlmd->dev;
+	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
 
-	guard(device)(dev);
+	guard(device)(&port->dev);
 
-	if (!dev->driver) {
-		dev_warn(&pdev->dev,
-			 "%s: memdev disabled, abort error handling\n",
-			 dev_name(dev));
-		return;
-	}
-
-	if (cxlds->rcd)
-		cxl_handle_rdport_errors(cxlds);
-
-	cxl_handle_cor_ras(&cxlmd->dev, cxlds->serial,
-			   cxlmd->endpoint->regs.ras);
+	cxl_port_cor_error_detected(&pdev->dev);
 }
-EXPORT_SYMBOL_NS_GPL(cxl_cor_error_detected, "CXL");
+EXPORT_SYMBOL_NS_GPL(cxl_pci_cor_error_detected, "CXL");
 
 pci_ers_result_t cxl_pci_error_detected(struct pci_dev *pdev,
 					pci_channel_state_t error)
