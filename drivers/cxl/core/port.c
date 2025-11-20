@@ -1451,7 +1451,7 @@ static void del_dport(struct cxl_dport *dport)
 {
 	struct cxl_port *port = dport->port;
 
-	devm_release_action(&port->dev, unlink_dport, dport);
+	devres_release_group(&port->dev, dport);
 }
 
 static void del_dports(struct cxl_port *port)

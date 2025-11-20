@@ -246,6 +246,18 @@ void __wrap_devm_cxl_dport_ras_setup(struct cxl_dport *dport)
 }
 EXPORT_SYMBOL_NS_GPL(__wrap_devm_cxl_dport_ras_setup, "CXL");
 
+void __wrap_devm_cxl_port_ras_setup(struct cxl_port *port)
+{
+	int index;
+	struct cxl_mock_ops *ops = get_cxl_mock_ops(&index);
+
+	if (!ops || !ops->is_mock_port(port->uport_dev))
+		devm_cxl_port_ras_setup(port);
+
+	put_cxl_mock_ops(index);
+}
+EXPORT_SYMBOL_NS_GPL(__wrap_devm_cxl_port_ras_setup, "CXL");
+
 struct cxl_dport *__wrap_cxl_add_dport_by_dev(struct cxl_port *port,
 					      struct device *dport_dev)
 {
