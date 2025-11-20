@@ -162,6 +162,17 @@ void devm_cxl_dport_ras_setup(struct cxl_dport *dport)
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_dport_ras_setup, "CXL");
 
+void devm_cxl_port_ras_setup(struct cxl_port *port)
+{
+	struct cxl_register_map *map = &port->reg_map;
+
+	map->host = &port->dev;
+	if (cxl_map_component_regs(map, &port->regs,
+				   BIT(CXL_CM_CAP_CAP_ID_RAS)))
+		dev_dbg(&port->dev, "Failed to map RAS capability\n");
+}
+EXPORT_SYMBOL_NS_GPL(devm_cxl_port_ras_setup, "CXL");
+
 void cxl_handle_cor_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 {
 	void __iomem *addr;

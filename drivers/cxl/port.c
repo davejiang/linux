@@ -176,9 +176,27 @@ static struct cxl_port *cxl_port_devres_group(struct cxl_port *port)
 DEFINE_FREE(cxl_port_group_free, struct cxl_port *,
 	    if (!IS_ERR_OR_NULL(_T)) devres_release_group(&(_T)->dev, _T))
 
+static struct cxl_dport *cxl_dport_devres_group(struct cxl_dport *dport)
+{
+	if (!devres_open_group(&dport->port->dev, dport, GFP_KERNEL))
+		return ERR_PTR(-ENOMEM);
+	return dport;
+}
+DEFINE_FREE(cxl_dport_group_free, struct cxl_dport *,
+	if (!IS_ERR_OR_NULL(_T)) devres_release_group(&(_T)->port->dev, _T))
+
 static void cxl_port_group_close(struct cxl_port *port)
 {
 	devres_remove_group(&port->dev, port);
+}
+
+/*
+ * Unlike the port group, that just facilitates unwind of setup failures, the
+ * dport group needs to stay live for del_dport() to reference.
+ */
+static void cxl_dport_group_close(struct cxl_dport *dport)
+{
+	devres_close_group(&dport->port->dev, dport);
 }
 
 static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
@@ -209,6 +227,13 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 		rc = devm_cxl_switch_port_decoders_setup(port);
 		if (rc)
 			return ERR_PTR(rc);
+
+		/*
+		 * RAS setup is optional, either driver operation can continue
+		 * on failure, or the device does not implement RAS registers.
+		 */
+		devm_cxl_port_ras_setup(port);
+
 		/*
 		 * Note, when nr_dports returns to zero the port is unregistered
 		 * and triggers cleanup. I.e. no need for open-coded release
@@ -220,12 +245,24 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 	if (IS_ERR(new_dport))
 		return new_dport;
 
+	/*
+	 * Establish a group for all dport resources that need to be released
+	 * when the dport is deleted.
+	 */
+	struct cxl_dport *dport_group __free(cxl_dport_group_free) =
+		cxl_dport_devres_group(new_dport);
+	if (IS_ERR(dport_group))
+		return ERR_CAST(dport_group);
+
 	rc = cxl_dport_autoremove(new_dport);
 	if (rc)
 		return ERR_PTR(rc);
 
+	devm_cxl_dport_ras_setup(new_dport);
+
 	cxl_switch_parse_cdat(new_dport);
 
+	cxl_dport_group_close(no_free_ptr(dport_group));
 	cxl_port_group_close(no_free_ptr(port_group));
 
 	dev_dbg(&port->dev, "dport[%d] id:%d dport_dev: %s added\n",
