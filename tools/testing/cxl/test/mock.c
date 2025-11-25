@@ -15,14 +15,13 @@
 static LIST_HEAD(mock);
 
 static struct cxl_dport *
-redirect_devm_cxl_add_dport_by_dev(struct cxl_port *port,
-				   struct device *dport_dev);
+redirect_cxl_add_dport_by_dev(struct cxl_port *port, struct device *dport_dev);
 static int redirect_devm_cxl_switch_port_decoders_setup(struct cxl_port *port);
 
 void register_cxl_mock_ops(struct cxl_mock_ops *ops)
 {
 	list_add_rcu(&ops->list, &mock);
-	_devm_cxl_add_dport_by_dev = redirect_devm_cxl_add_dport_by_dev;
+	_cxl_add_dport_by_dev = redirect_cxl_add_dport_by_dev;
 	_devm_cxl_switch_port_decoders_setup =
 		redirect_devm_cxl_switch_port_decoders_setup;
 }
@@ -34,7 +33,7 @@ void unregister_cxl_mock_ops(struct cxl_mock_ops *ops)
 {
 	_devm_cxl_switch_port_decoders_setup =
 		__devm_cxl_switch_port_decoders_setup;
-	_devm_cxl_add_dport_by_dev = __devm_cxl_add_dport_by_dev;
+	_cxl_add_dport_by_dev = __cxl_add_dport_by_dev;
 	list_del_rcu(&ops->list);
 	synchronize_srcu(&cxl_mock_srcu);
 }
@@ -207,7 +206,7 @@ int __wrap_cxl_await_media_ready(struct cxl_dev_state *cxlds)
 }
 EXPORT_SYMBOL_NS_GPL(__wrap_cxl_await_media_ready, "CXL");
 
-struct cxl_dport *__wrap_devm_cxl_add_rch_dport(struct cxl_port *port,
+struct cxl_dport *__wrap_cxl_add_rch_dport(struct cxl_port *port,
 						struct device *dport_dev,
 						int port_id,
 						resource_size_t rcrb)
@@ -217,19 +216,19 @@ struct cxl_dport *__wrap_devm_cxl_add_rch_dport(struct cxl_port *port,
 	struct cxl_mock_ops *ops = get_cxl_mock_ops(&index);
 
 	if (ops && ops->is_mock_port(dport_dev)) {
-		dport = devm_cxl_add_dport(port, dport_dev, port_id,
-					   CXL_RESOURCE_NONE);
+		dport = cxl_add_dport(port, dport_dev, port_id,
+				      CXL_RESOURCE_NONE);
 		if (!IS_ERR(dport)) {
 			dport->rcrb.base = rcrb;
 			dport->rch = true;
 		}
 	} else
-		dport = devm_cxl_add_rch_dport(port, dport_dev, port_id, rcrb);
+		dport = cxl_add_rch_dport(port, dport_dev, port_id, rcrb);
 	put_cxl_mock_ops(index);
 
 	return dport;
 }
-EXPORT_SYMBOL_NS_GPL(__wrap_devm_cxl_add_rch_dport, "CXL");
+EXPORT_SYMBOL_NS_GPL(__wrap_cxl_add_rch_dport, "CXL");
 
 void __wrap_cxl_endpoint_parse_cdat(struct cxl_port *port)
 {
@@ -257,17 +256,17 @@ void __wrap_cxl_dport_init_ras_reporting(struct cxl_dport *dport, struct device 
 }
 EXPORT_SYMBOL_NS_GPL(__wrap_cxl_dport_init_ras_reporting, "CXL");
 
-struct cxl_dport *redirect_devm_cxl_add_dport_by_dev(struct cxl_port *port,
-						     struct device *dport_dev)
+struct cxl_dport *redirect_cxl_add_dport_by_dev(struct cxl_port *port,
+						struct device *dport_dev)
 {
 	int index;
 	struct cxl_mock_ops *ops = get_cxl_mock_ops(&index);
 	struct cxl_dport *dport;
 
 	if (ops && ops->is_mock_port(port->uport_dev))
-		dport = ops->devm_cxl_add_dport_by_dev(port, dport_dev);
+		dport = ops->cxl_add_dport_by_dev(port, dport_dev);
 	else
-		dport = __devm_cxl_add_dport_by_dev(port, dport_dev);
+		dport = __cxl_add_dport_by_dev(port, dport_dev);
 	put_cxl_mock_ops(index);
 
 	return dport;

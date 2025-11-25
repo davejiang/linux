@@ -679,15 +679,18 @@ static int add_host_bridge_dport(struct device *match, void *arg)
 	if (ctx.cxl_version == ACPI_CEDT_CHBS_VERSION_CXL11) {
 		dev_dbg(match, "RCRB found for UID %lld: %pa\n", ctx.uid,
 			&ctx.base);
-		dport = devm_cxl_add_rch_dport(root_port, bridge, ctx.uid,
-					       ctx.base);
+		dport = cxl_add_rch_dport(root_port, bridge, ctx.uid, ctx.base);
 	} else {
-		dport = devm_cxl_add_dport(root_port, bridge, ctx.uid,
-					   CXL_RESOURCE_NONE);
+		dport = cxl_add_dport(root_port, bridge, ctx.uid,
+				      CXL_RESOURCE_NONE);
 	}
 
 	if (IS_ERR(dport))
 		return PTR_ERR(dport);
+
+	ret = cxl_dport_autoremove(dport);
+	if (ret)
+		return ret;
 
 	ret = get_genport_coordinates(match, dport);
 	if (ret)

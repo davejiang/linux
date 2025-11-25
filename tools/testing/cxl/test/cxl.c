@@ -1060,8 +1060,8 @@ static struct cxl_dport *mock_cxl_add_dport_by_dev(struct cxl_port *port,
 		if (&pdev->dev != dport_dev)
 			continue;
 
-		return devm_cxl_add_dport(port, &pdev->dev, pdev->id,
-					  CXL_RESOURCE_NONE);
+		return cxl_add_dport(port, &pdev->dev, pdev->id,
+				     CXL_RESOURCE_NONE);
 	}
 
 	return ERR_PTR(-ENODEV);
@@ -1126,9 +1126,9 @@ static struct cxl_mock_ops cxl_mock_ops = {
 	.devm_cxl_switch_port_decoders_setup = mock_cxl_switch_port_decoders_setup,
 	.devm_cxl_endpoint_decoders_setup = mock_cxl_endpoint_decoders_setup,
 	.cxl_endpoint_parse_cdat = mock_cxl_endpoint_parse_cdat,
-	.devm_cxl_add_dport_by_dev = mock_cxl_add_dport_by_dev,
 	.hmat_get_extended_linear_cache_size =
 		mock_hmat_get_extended_linear_cache_size,
+	.cxl_add_dport_by_dev = mock_cxl_add_dport_by_dev,
 	.list = LIST_HEAD_INIT(cxl_mock_ops.list),
 };
 
