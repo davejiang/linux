@@ -71,6 +71,14 @@ struct cxl_dport *__devm_cxl_add_dport_by_dev(struct cxl_port *port,
 }
 EXPORT_SYMBOL_NS_GPL(__devm_cxl_add_dport_by_dev, "CXL");
 
+struct cxl_walk_context {
+	struct pci_bus *bus;
+	struct cxl_port *port;
+	int type;
+	int error;
+	int count;
+};
+
 static int cxl_dvsec_mem_range_valid(struct cxl_dev_state *cxlds, int id)
 {
 	struct pci_dev *pdev = to_pci_dev(cxlds->dev);
@@ -819,14 +827,6 @@ int cxl_gpf_port_setup(struct cxl_dport *dport)
 
 	return 0;
 }
-
-struct cxl_walk_context {
-	struct pci_bus *bus;
-	struct cxl_port *port;
-	int type;
-	int error;
-	int count;
-};
 
 static int count_dports(struct pci_dev *pdev, void *data)
 {
