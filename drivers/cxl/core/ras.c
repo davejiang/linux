@@ -247,6 +247,7 @@ bool cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 void cxl_cor_error_detected(struct pci_dev *pdev)
 {
 	struct cxl_dev_state *cxlds = pci_get_drvdata(pdev);
+	struct cxl_memdev *cxlmd = cxlds->cxlmd;
 	struct device *dev = &cxlds->cxlmd->dev;
 
 	scoped_guard(device, dev) {
@@ -261,7 +262,7 @@ void cxl_cor_error_detected(struct pci_dev *pdev)
 			cxl_handle_rdport_errors(cxlds);
 
 		cxl_handle_cor_ras(&cxlds->cxlmd->dev, cxlds->serial,
-				   cxlds->regs.ras);
+				   cxlmd->endpoint->regs.ras);
 	}
 }
 EXPORT_SYMBOL_NS_GPL(cxl_cor_error_detected, "CXL");
@@ -291,9 +292,8 @@ pci_ers_result_t cxl_error_detected(struct pci_dev *pdev,
 		 * capability registers and bounce the active state of the memdev.
 		 */
 		ue = cxl_handle_ras(&cxlds->cxlmd->dev, cxlds->serial,
-				    cxlds->regs.ras);
+				    cxlmd->endpoint->regs.ras);
 	}
-
 
 	switch (state) {
 	case pci_channel_io_normal:
