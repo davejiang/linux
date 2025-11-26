@@ -155,9 +155,80 @@ static const struct attribute_group *cxl_port_attribute_groups[] = {
 	NULL,
 };
 
+static struct cxl_port *cxl_port_devres_group(struct cxl_port *port)
+{
+	if (!devres_open_group(&port->dev, port, GFP_KERNEL))
+		return ERR_PTR(-ENOMEM);
+	return port;
+}
+DEFINE_FREE(cxl_port_group_free, struct cxl_port *,
+	    if (!IS_ERR_OR_NULL(_T)) devres_release_group(&(_T)->dev, _T))
+
+static void cxl_port_group_close(struct cxl_port *port)
+{
+	devres_remove_group(&port->dev, port);
+}
+
+static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
+					    struct device *dport_dev)
+{
+	struct cxl_dport *new_dport;
+	struct cxl_dport *dport;
+	int rc;
+
+	dport = cxl_find_dport_by_dev(port, dport_dev);
+	if (dport) {
+		dev_dbg(&port->dev, "dport%d:%s already exists\n",
+			dport->port_id, dev_name(dport_dev));
+		return ERR_PTR(-EBUSY);
+	}
+
+	/*
+	 * With the first dport arrival it is now safe to start looking at
+	 * component registers. Be careful to not strand resources if dport
+	 * creation ultimately fails.
+	 */
+	struct cxl_port *port_group __free(cxl_port_group_free) =
+		cxl_port_devres_group(port);
+	if (IS_ERR(port_group))
+		return ERR_CAST(port_group);
+
+	if (port->nr_dports == 0) {
+		rc = devm_cxl_switch_port_decoders_setup(port);
+		if (rc)
+			return ERR_PTR(rc);
+		/*
+		 * Note, when nr_dports returns to zero the port is unregistered
+		 * and triggers cleanup. I.e. no need for open-coded release
+		 * action on dport removal. See cxl_detach_ep() for that logic.
+		 */
+	}
+
+	new_dport = cxl_add_dport_by_dev(port, dport_dev);
+	if (IS_ERR(new_dport))
+		return new_dport;
+
+	rc = cxl_dport_autoremove(new_dport);
+	if (rc)
+		return ERR_PTR(rc);
+
+	cxl_switch_parse_cdat(new_dport);
+
+	cxl_port_group_close(no_free_ptr(port_group));
+
+	dev_dbg(&port->dev, "dport[%d] id:%d dport_dev: %s added\n",
+		port->nr_dports - 1, new_dport->port_id, dev_name(dport_dev));
+
+	/* New dport added, update the decoder targets */
+	cxl_port_update_decoder_targets(port, new_dport);
+
+	return new_dport;
+}
+
 static struct cxl_driver cxl_port_driver = {
 	.name = "cxl_port",
 	.probe = cxl_port_probe,
+	.add_dport = cxl_port_add_dport,
 	.id = CXL_DEVICE_PORT,
 	.drv = {
 		.dev_groups = cxl_port_attribute_groups,

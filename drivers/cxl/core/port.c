@@ -1603,78 +1603,31 @@ static int update_decoder_targets(struct device *dev, void *data)
 	return 0;
 }
 
-static struct cxl_port *cxl_port_devres_group(struct cxl_port *port)
+void cxl_port_update_decoder_targets(struct cxl_port *port,
+				     struct cxl_dport *dport)
 {
-	if (!devres_open_group(&port->dev, port, GFP_KERNEL))
-		return ERR_PTR(-ENOMEM);
-	return port;
+	device_for_each_child(&port->dev, dport, update_decoder_targets);
 }
+EXPORT_SYMBOL_NS_GPL(cxl_port_update_decoder_targets, "CXL");
+
 DEFINE_FREE(cxl_port_group_free, struct cxl_port *,
 	if (!IS_ERR_OR_NULL(_T)) devres_release_group(&(_T)->dev, _T))
 
-static void cxl_port_group_close(struct cxl_port *port)
+static struct cxl_dport *probe_dport(struct cxl_port *port,
+				     struct device *dport_dev)
 {
-	devres_remove_group(&port->dev, port);
-}
-
-static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
-					    struct device *dport_dev)
-{
-	struct cxl_dport *new_dport;
-	struct cxl_dport *dport;
-	int rc;
+	struct cxl_driver *drv;
 
 	device_lock_assert(&port->dev);
 	if (!port->dev.driver)
 		return ERR_PTR(-ENXIO);
 
-	dport = cxl_find_dport_by_dev(port, dport_dev);
-	if (dport) {
-		dev_dbg(&port->dev, "dport%d:%s already exists\n",
-			dport->port_id, dev_name(dport_dev));
-		return ERR_PTR(-EBUSY);
-	}
+	drv = container_of(port->dev.driver, struct cxl_driver, drv);
+	if (!drv->add_dport)
+		return ERR_PTR(-ENXIO);
 
-	/*
-	 * With the first dport arrival it is now safe to start looking at
-	 * component registers. Be careful to not strand resources if dport
-	 * creation ultimately fails.
-	 */
-	struct cxl_port *port_group __free(cxl_port_group_free) =
-		cxl_port_devres_group(port);
-	if (IS_ERR(port_group))
-		return ERR_CAST(port_group);
-
-	if (port->nr_dports == 0) {
-		rc = devm_cxl_switch_port_decoders_setup(port);
-		if (rc)
-			return ERR_PTR(rc);
-		/*
-		 * Note, when nr_dports returns to zero the port is unregistered
-		 * and triggers cleanup. I.e. no need for open-coded release
-		 * action on dport removal. See cxl_detach_ep() for that logic.
-		 */
-	}
-
-	new_dport = cxl_add_dport_by_dev(port, dport_dev);
-	if (IS_ERR(new_dport))
-		return new_dport;
-
-	rc = cxl_dport_autoremove(new_dport);
-	if (rc)
-		return ERR_PTR(rc);
-
-	cxl_switch_parse_cdat(new_dport);
-
-	cxl_port_group_close(no_free_ptr(port_group));
-
-	dev_dbg(&port->dev, "dport[%d] id:%d dport_dev: %s added\n",
-		port->nr_dports - 1, new_dport->port_id, dev_name(dport_dev));
-
-	/* New dport added, update the decoder targets */
-	device_for_each_child(&port->dev, new_dport, update_decoder_targets);
-
-	return new_dport;
+	/* see cxl_port_add_dport() */
+	return drv->add_dport(port, dport_dev);
 }
 
 static struct cxl_dport *devm_cxl_create_port(struct device *ep_dev,
@@ -1721,7 +1674,7 @@ static struct cxl_dport *devm_cxl_create_port(struct device *ep_dev,
 	}
 
 	guard(device)(&port->dev);
-	return cxl_port_add_dport(port, dport_dev);
+	return probe_dport(port, dport_dev);
 }
 
 static int add_port_attach_ep(struct cxl_memdev *cxlmd,
@@ -1753,7 +1706,7 @@ static int add_port_attach_ep(struct cxl_memdev *cxlmd,
 	scoped_guard(device, &parent_port->dev) {
 		parent_dport = cxl_find_dport_by_dev(parent_port, dparent);
 		if (!parent_dport) {
-			parent_dport = cxl_port_add_dport(parent_port, dparent);
+			parent_dport = probe_dport(parent_port, dparent);
 			if (IS_ERR(parent_dport))
 				return PTR_ERR(parent_dport);
 		}
@@ -1789,7 +1742,7 @@ static struct cxl_dport *find_or_add_dport(struct cxl_port *port,
 	device_lock_assert(&port->dev);
 	dport = cxl_find_dport_by_dev(port, dport_dev);
 	if (!dport) {
-		dport = cxl_port_add_dport(port, dport_dev);
+		dport = probe_dport(port, dport_dev);
 		if (IS_ERR(dport))
 			return dport;
 
