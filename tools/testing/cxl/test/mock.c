@@ -234,17 +234,17 @@ void __wrap_cxl_endpoint_parse_cdat(struct cxl_port *port)
 }
 EXPORT_SYMBOL_NS_GPL(__wrap_cxl_endpoint_parse_cdat, "CXL");
 
-void __wrap_cxl_dport_init_ras_reporting(struct cxl_dport *dport, struct device *host)
+void __wrap_devm_cxl_dport_ras_setup(struct cxl_dport *dport)
 {
 	int index;
 	struct cxl_mock_ops *ops = get_cxl_mock_ops(&index);
 
 	if (!ops || !ops->is_mock_port(dport->dport_dev))
-		cxl_dport_init_ras_reporting(dport, host);
+		devm_cxl_dport_ras_setup(dport);
 
 	put_cxl_mock_ops(index);
 }
-EXPORT_SYMBOL_NS_GPL(__wrap_cxl_dport_init_ras_reporting, "CXL");
+EXPORT_SYMBOL_NS_GPL(__wrap_devm_cxl_dport_ras_setup, "CXL");
 
 struct cxl_dport *__wrap_cxl_add_dport_by_dev(struct cxl_port *port,
 					      struct device *dport_dev)
