@@ -200,6 +200,67 @@ static struct cxl_port *get_cxl_port(struct pci_dev *pdev)
 	return NULL;
 }
 
+static void __iomem *cxl_get_ras_base(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+
+	switch (pci_pcie_type(pdev)) {
+	case PCI_EXP_TYPE_ROOT_PORT:
+	case PCI_EXP_TYPE_DOWNSTREAM:
+	{
+		struct cxl_dport *dport;
+		struct cxl_port *port __free(put_cxl_port) = find_cxl_port(&pdev->dev, &dport);
+
+		if (!dport) {
+			pci_err(pdev, "Failed to find the CXL device");
+			return NULL;
+		}
+		return dport->regs.ras;
+	}
+	case PCI_EXP_TYPE_UPSTREAM:
+	{
+		struct cxl_port *port __free(put_cxl_port) = find_cxl_port_by_uport(&pdev->dev);
+
+		if (!port) {
+			pci_err(pdev, "Failed to find the CXL device");
+			return NULL;
+		}
+		return port->regs.ras;
+	}
+	}
+	dev_warn_once(dev, "Error: Unsupported device type (%#x)", pci_pcie_type(pdev));
+	return NULL;
+}
+
+static pci_ers_result_t cxl_port_error_detected(struct device *dev);
+
+static void cxl_do_recovery(struct pci_dev *pdev)
+{
+	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
+	pci_ers_result_t status;
+
+	if (!port) {
+		pci_err(pdev, "Failed to find the CXL device\n");
+		return;
+	}
+
+	status = cxl_port_error_detected(&pdev->dev);
+	if (status == PCI_ERS_RESULT_PANIC)
+		panic("CXL cachemem error.");
+
+	/*
+	 * If we have native control of AER, clear error status in the device
+	 * that detected the error.  If the platform retained control of AER,
+	 * it is responsible for clearing this status.  In that case, the
+	 * signaling device may not even be visible to the OS.
+	 */
+	if (pcie_aer_is_native(pdev)) {
+		pcie_clear_device_status(pdev);
+		pci_aer_clear_nonfatal_status(pdev);
+		pci_aer_clear_fatal_status(pdev);
+	}
+}
+
 void cxl_handle_cor_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 {
 	void __iomem *addr;
@@ -214,7 +275,10 @@ void cxl_handle_cor_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 		return;
 	writel(status & CXL_RAS_CORRECTABLE_STATUS_MASK, addr);
 
-	trace_cxl_aer_correctable_error(dev, status, serial);
+	if (is_cxl_memdev(dev))
+		trace_cxl_aer_correctable_error(dev, status, serial);
+	else
+		trace_cxl_port_aer_correctable_error(dev, status);
 }
 
 /* CXL spec rev3.0 8.2.4.16.1 */
@@ -265,10 +329,25 @@ bool cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 	}
 
 	header_log_copy(ras_base, hl);
-	trace_cxl_aer_uncorrectable_error(dev, status, fe, hl, serial);
+
+	if (is_cxl_memdev(dev))
+		trace_cxl_aer_uncorrectable_error(dev, status, fe, hl, serial);
+	else
+		trace_cxl_port_aer_uncorrectable_error(dev, status, fe, hl);
+
 	writel(status & CXL_RAS_UNCORRECTABLE_STATUS_MASK, addr);
 
 	return true;
+}
+
+static void cxl_port_cor_error_detected(struct device *dev)
+{
+	cxl_handle_cor_ras(dev, 0, cxl_get_ras_base(dev));
+}
+
+static pci_ers_result_t cxl_port_error_detected(struct device *dev)
+{
+	return cxl_handle_ras(dev, 0, cxl_get_ras_base(dev));
 }
 
 void cxl_cor_error_detected(struct pci_dev *pdev)
@@ -346,6 +425,24 @@ EXPORT_SYMBOL_NS_GPL(cxl_error_detected, "CXL");
 
 static void cxl_handle_proto_error(struct cxl_proto_err_work_data *err_info)
 {
+	struct pci_dev *pdev = err_info->pdev;
+
+	if (err_info->severity == AER_CORRECTABLE) {
+
+		if (!pcie_aer_is_native(pdev))
+			return;
+
+		if (pdev->aer_cap)
+			pci_clear_and_set_config_dword(pdev,
+						       pdev->aer_cap + PCI_ERR_COR_STATUS,
+						       0, PCI_ERR_COR_INTERNAL);
+
+		cxl_port_cor_error_detected(&pdev->dev);
+
+		pcie_clear_device_status(pdev);
+	} else {
+		cxl_do_recovery(pdev);
+	}
 }
 
 static void cxl_proto_err_work_fn(struct work_struct *work)
