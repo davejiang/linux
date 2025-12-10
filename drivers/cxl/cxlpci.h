@@ -79,15 +79,20 @@ void read_cdat_data(struct cxl_port *port);
 
 #ifdef CONFIG_CXL_RAS
 void cxl_cor_error_detected(struct pci_dev *pdev);
-pci_ers_result_t cxl_error_detected(struct pci_dev *pdev,
-				    pci_channel_state_t state);
+pci_ers_result_t cxl_pci_error_detected(struct pci_dev *pdev,
+					pci_channel_state_t error);
 void devm_cxl_dport_ras_setup(struct cxl_dport *dport);
 void devm_cxl_port_ras_setup(struct cxl_port *port);
+void __cxl_dport_init_ras_reporting(struct cxl_dport *dport, struct device *host);
+void __cxl_uport_init_ras_reporting(struct cxl_port *port,
+				    struct device *host);
+int __cxl_await_media_ready(struct cxl_dev_state *cxlds);
+resource_size_t __cxl_rcd_component_reg_phys(struct device *dev,
+					     struct cxl_dport *dport);
 #else
 static inline void cxl_cor_error_detected(struct pci_dev *pdev) { }
-
-static inline pci_ers_result_t cxl_error_detected(struct pci_dev *pdev,
-						  pci_channel_state_t state)
+static inline pci_ers_result_t cxl_pci_error_detected(struct pci_dev *pdev,
+						      pci_channel_state_t state)
 {
 	return PCI_ERS_RESULT_NONE;
 }

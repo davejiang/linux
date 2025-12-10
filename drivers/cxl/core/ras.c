@@ -218,6 +218,7 @@ static void __iomem *cxl_get_ras_base(struct device *dev)
 		return dport->regs.ras;
 	}
 	case PCI_EXP_TYPE_UPSTREAM:
+	case PCI_EXP_TYPE_ENDPOINT:
 	{
 		struct cxl_port *port __free(put_cxl_port) = find_cxl_port_by_uport(&pdev->dev);
 
@@ -302,20 +303,22 @@ static void header_log_copy(void __iomem *ras_base, u32 *log)
  * Log the state of the RAS status registers and prepare them to log the
  * next error status. Return 1 if reset needed.
  */
-bool cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ras_base)
+pci_ers_result_t cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 {
 	u32 hl[CXL_HEADERLOG_SIZE_U32];
 	void __iomem *addr;
 	u32 status;
 	u32 fe;
 
-	if (!ras_base)
-		return false;
+	if (!ras_base) {
+		dev_warn_once(dev, "CXL RAS register block is not mapped");
+		return PCI_ERS_RESULT_NONE;
+	}
 
 	addr = ras_base + CXL_RAS_UNCORRECTABLE_STATUS_OFFSET;
 	status = readl(addr);
 	if (!(status & CXL_RAS_UNCORRECTABLE_STATUS_MASK))
-		return false;
+		return PCI_ERS_RESULT_NONE;
 
 	/* If multiple errors, log header points to first error from ctrl reg */
 	if (hweight32(status) > 1) {
@@ -337,7 +340,7 @@ bool cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 
 	writel(status & CXL_RAS_UNCORRECTABLE_STATUS_MASK, addr);
 
-	return true;
+	return PCI_ERS_RESULT_PANIC;
 }
 
 static void cxl_port_cor_error_detected(struct device *dev)
@@ -347,7 +350,30 @@ static void cxl_port_cor_error_detected(struct device *dev)
 
 static pci_ers_result_t cxl_port_error_detected(struct device *dev)
 {
-	return cxl_handle_ras(dev, 0, cxl_get_ras_base(dev));
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
+	u64 serial = 0;
+
+	if (is_cxl_endpoint(port)) {
+		struct cxl_memdev *cxlmd = to_cxl_memdev(port->uport_dev);
+		struct cxl_dev_state *cxlds = cxlmd->cxlds;
+
+		guard(device)(&cxlmd->dev);
+
+		if (!dev->driver) {
+			dev_warn(&pdev->dev,
+				 "%s: memdev disabled, abort error handling\n",
+				 dev_name(dev));
+			return PCI_ERS_RESULT_NONE;
+		}
+
+		if (cxlds->rcd)
+			cxl_handle_rdport_errors(cxlds);
+
+		serial = cxlds->serial;
+	}
+
+	return cxl_handle_ras(dev, serial, cxl_get_ras_base(dev));
 }
 
 void cxl_cor_error_detected(struct pci_dev *pdev)
@@ -373,55 +399,21 @@ void cxl_cor_error_detected(struct pci_dev *pdev)
 }
 EXPORT_SYMBOL_NS_GPL(cxl_cor_error_detected, "CXL");
 
-pci_ers_result_t cxl_error_detected(struct pci_dev *pdev,
-				    pci_channel_state_t state)
+pci_ers_result_t cxl_pci_error_detected(struct pci_dev *pdev,
+					pci_channel_state_t error)
 {
-	struct cxl_dev_state *cxlds = pci_get_drvdata(pdev);
-	struct cxl_memdev *cxlmd = cxlds->cxlmd;
-	struct device *dev = &cxlmd->dev;
-	bool ue;
+	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
+	pci_ers_result_t rc;
 
-	guard(device)(dev);
+	guard(device)(&port->dev);
 
-	if (!dev->driver) {
-		dev_warn(&pdev->dev,
-			 "%s: memdev disabled, abort error handling\n",
-			 dev_name(dev));
-		return PCI_ERS_RESULT_DISCONNECT;
-	}
+	rc = cxl_port_error_detected(&pdev->dev);
+	if (rc == PCI_ERS_RESULT_PANIC)
+		panic("CXL cachemem error.");
 
-	if (cxlds->rcd)
-		cxl_handle_rdport_errors(cxlds);
-	/*
-	 * A frozen channel indicates an impending reset which is fatal to
-	 * CXL.mem operation, and will likely crash the system. On the off
-	 * chance the situation is recoverable dump the status of the RAS
-	 * capability registers and bounce the active state of the memdev.
-	 */
-	ue = cxl_handle_ras(&cxlmd->dev, cxlds->serial,
-			    cxlmd->endpoint->regs.ras);
-
-	switch (state) {
-	case pci_channel_io_normal:
-		if (ue) {
-			device_release_driver(dev);
-			return PCI_ERS_RESULT_NEED_RESET;
-		}
-		return PCI_ERS_RESULT_CAN_RECOVER;
-	case pci_channel_io_frozen:
-		dev_warn(&pdev->dev,
-			 "%s: frozen state error detected, disable CXL.mem\n",
-			 dev_name(dev));
-		device_release_driver(dev);
-		return PCI_ERS_RESULT_NEED_RESET;
-	case pci_channel_io_perm_failure:
-		dev_warn(&pdev->dev,
-			 "failure state error detected, request disconnect\n");
-		return PCI_ERS_RESULT_DISCONNECT;
-	}
-	return PCI_ERS_RESULT_NEED_RESET;
+	return rc;
 }
-EXPORT_SYMBOL_NS_GPL(cxl_error_detected, "CXL");
+EXPORT_SYMBOL_NS_GPL(cxl_pci_error_detected, "CXL");
 
 static void cxl_handle_proto_error(struct cxl_proto_err_work_data *err_info)
 {
