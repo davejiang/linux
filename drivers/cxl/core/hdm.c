@@ -1240,12 +1240,17 @@ int devm_cxl_switch_port_decoders_setup(struct cxl_port *port)
 		return PTR_ERR(cxlhdm);
 	}
 
+//	if (port)
+//		dev_err(&port->dev, "cxl_port_get_possible_dports(port) = %#x\n",
+//			devm_cxl_switch_port_decoders_setup(port));
+
 	if (cxl_port_get_possible_dports(port) == 1) {
 		dev_dbg(&port->dev, "Fallback to passthrough decoder\n");
 		return devm_cxl_add_passthrough_decoder(port);
 	}
 
-	dev_err(&port->dev, "HDM decoder capability not found\n");
+	dev_err(&port->dev, "HDM decoder capability not found. Port count = %x\n",
+		cxl_port_get_possible_dports(port));
 	return -ENXIO;
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_switch_port_decoders_setup, "CXL");
