@@ -278,6 +278,11 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 		return ERR_CAST(port_group);
 
 	if (port->nr_dports == 0) {
+
+		rc = cxl_port_setup_regs(port, port->component_reg_phys);
+		if (rc)
+			return ERR_PTR(rc);
+
 		rc = devm_cxl_switch_port_decoders_setup(port);
 		if (rc)
 			return ERR_PTR(rc);

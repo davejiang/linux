@@ -99,4 +99,7 @@ static inline void devm_cxl_port_ras_setup(struct cxl_port *port)
 }
 #endif
 
+int cxl_port_setup_regs(struct cxl_port *port,
+			resource_size_t component_reg_phys);
+
 #endif /* __CXL_PCI_H__ */
