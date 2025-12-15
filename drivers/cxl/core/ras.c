@@ -117,6 +117,27 @@ static void cxl_cper_prot_err_work_fn(struct work_struct *work)
 }
 static DECLARE_WORK(cxl_cper_prot_err_work, cxl_cper_prot_err_work_fn);
 
+int gstatus = 0;
+
+static void update_ras_status(struct device *dev, int bus)
+{
+	struct pci_dev *pdev;
+
+	if (is_cxl_memdev(dev)) {
+		struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
+		struct cxl_dev_state *cxlds = cxlmd->cxlds;
+
+		pdev = to_pci_dev(cxlds->dev);
+	} else {
+		pdev = to_pci_dev(dev);
+	}
+
+	if (!pdev->bus || !pdev->bus->number)
+		dev_err(dev, "%s():%d: pdev does not have a bus configured\n", __func__, __LINE__);
+	if (pdev->bus->number == bus)
+		gstatus |= 0x4;
+}
+
 void cxl_unmask_proto_interrupts(struct device *dev)
 {
 	if (!dev || !dev_is_pci(dev))
@@ -294,8 +315,13 @@ void cxl_handle_cor_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 		return;
 	}
 
+	if (!ras_base)
+		return;
+
 	addr = ras_base + CXL_RAS_CORRECTABLE_STATUS_OFFSET;
 	status = readl(addr);
+	status |= gstatus;
+	gstatus = 0;
 	if (!(status & CXL_RAS_CORRECTABLE_STATUS_MASK))
 		return;
 	writel(status & CXL_RAS_CORRECTABLE_STATUS_MASK, addr);
@@ -304,6 +330,7 @@ void cxl_handle_cor_ras(struct device *dev, u64 serial, void __iomem *ras_base)
 		trace_cxl_aer_correctable_error(dev, status, serial);
 	else
 		trace_cxl_port_aer_correctable_error(dev, status);
+
 }
 
 /* CXL spec rev3.0 8.2.4.16.1 */
@@ -341,6 +368,8 @@ pci_ers_result_t cxl_handle_ras(struct device *dev, u64 serial, void __iomem *ra
 
 	addr = ras_base + CXL_RAS_UNCORRECTABLE_STATUS_OFFSET;
 	status = readl(addr);
+	status |= gstatus;
+	gstatus = 0;
 	if (!(status & CXL_RAS_UNCORRECTABLE_STATUS_MASK))
 		return PCI_ERS_RESULT_NONE;
 
@@ -373,6 +402,11 @@ static void cxl_port_cor_error_detected(struct device *dev)
 	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
 	u64 serial = 0;
 
+	update_ras_status(dev, 0xc);
+	update_ras_status(dev, 0xd);
+	update_ras_status(dev, 0xe);
+	update_ras_status(dev, 0xf);
+
 	if (is_cxl_endpoint(port)) {
 		struct cxl_memdev *cxlmd = to_cxl_memdev(port->uport_dev);
 		struct cxl_dev_state *cxlds = cxlmd->cxlds;
@@ -401,6 +435,11 @@ static pci_ers_result_t cxl_port_error_detected(struct device *dev)
 	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
 	u64 serial = 0;
 
+	update_ras_status(dev, 0xc);
+	update_ras_status(dev, 0xd);
+	update_ras_status(dev, 0xe);
+	update_ras_status(dev, 0xf);
+
 	if (is_cxl_endpoint(port)) {
 		struct cxl_memdev *cxlmd = to_cxl_memdev(port->uport_dev);
 		struct cxl_dev_state *cxlds = cxlmd->cxlds;
@@ -413,7 +452,6 @@ static pci_ers_result_t cxl_port_error_detected(struct device *dev)
 				 dev_name(dev));
 			return PCI_ERS_RESULT_NONE;
 		}
-
 		if (cxlds->rcd)
 			cxl_handle_rdport_errors(cxlds);
 
@@ -427,6 +465,11 @@ void cxl_pci_cor_error_detected(struct pci_dev *pdev)
 {
 	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
 
+	update_ras_status(&pdev->dev, 0xf);
+	update_ras_status(&pdev->dev, 0x10);
+	update_ras_status(&pdev->dev, 0x11);
+	update_ras_status(&pdev->dev, 0x12);
+
 	guard(device)(&port->dev);
 
 	cxl_port_cor_error_detected(&pdev->dev);
@@ -438,6 +481,11 @@ pci_ers_result_t cxl_pci_error_detected(struct pci_dev *pdev,
 {
 	struct cxl_port *port __free(put_cxl_port) = get_cxl_port(pdev);
 	pci_ers_result_t rc;
+
+	update_ras_status(&pdev->dev, 0xf);
+	update_ras_status(&pdev->dev, 0x10);
+	update_ras_status(&pdev->dev, 0x11);
+	update_ras_status(&pdev->dev, 0x12);
 
 	guard(device)(&port->dev);
 
