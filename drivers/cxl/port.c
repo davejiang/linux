@@ -59,8 +59,12 @@ static int discover_region(struct device *dev, void *unused)
 
 static int cxl_switch_port_probe(struct cxl_port *port)
 {
-	/* Reset nr_dports for rebind of driver */
-	port->nr_dports = 0;
+	/*
+	 * Unfortunately, typical driver operations like "find and map
+	 * registers", can not be done at port device attach time and must wait
+	 * for dport arrival. See cxl_port_add_dport() and the comments in
+	 * add_dport() for details.
+	 */
 
 	/* Cache the data early to ensure is_visible() works */
 	read_cdat_data(port);

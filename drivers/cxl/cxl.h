@@ -796,12 +796,12 @@ struct cxl_port *cxl_mem_find_port(struct cxl_memdev *cxlmd,
 				   struct cxl_dport **dport);
 bool schedule_cxl_memdev_detach(struct cxl_memdev *cxlmd);
 
-struct cxl_dport *devm_cxl_add_dport(struct cxl_port *port,
-				     struct device *dport, int port_id,
-				     resource_size_t component_reg_phys);
-struct cxl_dport *devm_cxl_add_rch_dport(struct cxl_port *port,
-					 struct device *dport_dev, int port_id,
-					 resource_size_t rcrb);
+struct cxl_dport *cxl_add_dport(struct cxl_port *port, struct device *dport,
+				int port_id,
+				resource_size_t component_reg_phys);
+struct cxl_dport *cxl_add_rch_dport(struct cxl_port *port,
+				    struct device *dport_dev, int port_id,
+				    resource_size_t rcrb);
 
 struct cxl_decoder *to_cxl_decoder(struct device *dev);
 struct cxl_root_decoder *to_cxl_root_decoder(struct device *dev);
@@ -824,6 +824,7 @@ static inline int cxl_root_decoder_autoremove(struct device *host,
 	return cxl_decoder_autoremove(host, &cxlrd->cxlsd.cxld);
 }
 int cxl_endpoint_autoremove(struct cxl_memdev *cxlmd, struct cxl_port *endpoint);
+int cxl_dport_autoremove(struct cxl_dport *dport);
 
 /**
  * struct cxl_endpoint_dvsec_info - Cached DVSEC info
@@ -937,10 +938,10 @@ void cxl_coordinates_combine(struct access_coordinate *out,
 			     struct access_coordinate *c2);
 
 bool cxl_endpoint_decoder_reset_detected(struct cxl_port *port);
-struct cxl_dport *devm_cxl_add_dport_by_dev(struct cxl_port *port,
-					    struct device *dport_dev);
-struct cxl_dport *__devm_cxl_add_dport_by_dev(struct cxl_port *port,
-					      struct device *dport_dev);
+struct cxl_dport *cxl_add_dport_by_dev(struct cxl_port *port,
+				       struct device *dport_dev);
+struct cxl_dport *__cxl_add_dport_by_dev(struct cxl_port *port,
+					 struct device *dport_dev);
 
 /*
  * Unit test builds overrides this to __weak, find the 'strong' version
@@ -964,7 +965,7 @@ u16 cxl_gpf_get_dvsec(struct device *dev);
  */
 #ifndef CXL_TEST_ENABLE
 #define DECLARE_TESTABLE(x) __##x
-#define devm_cxl_add_dport_by_dev DECLARE_TESTABLE(devm_cxl_add_dport_by_dev)
+#define cxl_add_dport_by_dev DECLARE_TESTABLE(cxl_add_dport_by_dev)
 #define devm_cxl_switch_port_decoders_setup DECLARE_TESTABLE(devm_cxl_switch_port_decoders_setup)
 #endif
 

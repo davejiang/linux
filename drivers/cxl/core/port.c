@@ -1066,11 +1066,28 @@ static int add_dport(struct cxl_port *port, struct cxl_dport *dport)
 		return -EBUSY;
 	}
 
+	/*
+	 * Unlike CXL switch upstream ports where it can train a CXL link
+	 * independent of its downstream ports, a host bridge upstream port may
+	 * not enable CXL registers until at least one downstream port (root
+	 * port) trains CXL. Enumerate registers once when the number of dports
+	 * transitions from zero to one.
+	 */
+	if (!port->nr_dports) {
+		rc = cxl_port_setup_regs(port, port->component_reg_phys);
+		if (rc)
+			return rc;
+	}
+
+	/* Arrange for dport_dev to be valid through remove_dport() */
+	struct device *dev __free(put_device) = get_device(dport->dport_dev);
+
 	rc = xa_insert(&port->dports, (unsigned long)dport->dport_dev, dport,
 		       GFP_KERNEL);
 	if (rc)
 		return rc;
 
+	retain_and_null_ptr(dev);
 	port->nr_dports++;
 	return 0;
 }
@@ -1094,51 +1111,64 @@ static void cond_cxl_root_unlock(struct cxl_port *port)
 		device_unlock(&port->dev);
 }
 
-static void cxl_dport_remove(void *data)
+static void remove_dport(struct cxl_dport *dport)
 {
-	struct cxl_dport *dport = data;
 	struct cxl_port *port = dport->port;
 
+	port->nr_dports--;
 	xa_erase(&port->dports, (unsigned long) dport->dport_dev);
 	put_device(dport->dport_dev);
 }
 
-static void cxl_dport_unlink(void *data)
+static struct cxl_dport *__register_dport(struct cxl_dport *dport)
 {
-	struct cxl_dport *dport = data;
-	struct cxl_port *port = dport->port;
-	char link_name[CXL_TARGET_STRLEN];
-
-	sprintf(link_name, "dport%d", dport->port_id);
-	sysfs_remove_link(&port->dev.kobj, link_name);
-}
-
-static struct cxl_dport *
-__devm_cxl_add_dport(struct cxl_port *port, struct device *dport_dev,
-		     int port_id, resource_size_t component_reg_phys,
-		     resource_size_t rcrb)
-{
-	char link_name[CXL_TARGET_STRLEN];
-	struct cxl_dport *dport;
-	struct device *host;
 	int rc;
+	char link_name[CXL_TARGET_STRLEN];
+	struct cxl_port *port = dport->port;
+	struct device *dport_dev = dport->dport_dev;
 
-	if (is_cxl_root(port))
-		host = port->uport_dev;
-	else
-		host = &port->dev;
-
-	if (!host->driver) {
-		dev_WARN_ONCE(&port->dev, 1, "dport:%s bad devm context\n",
-			      dev_name(dport_dev));
-		return ERR_PTR(-ENXIO);
-	}
-
-	if (snprintf(link_name, CXL_TARGET_STRLEN, "dport%d", port_id) >=
+	if (snprintf(link_name, CXL_TARGET_STRLEN, "dport%d", dport->port_id) >=
 	    CXL_TARGET_STRLEN)
 		return ERR_PTR(-EINVAL);
 
-	dport = devm_kzalloc(host, sizeof(*dport), GFP_KERNEL);
+	cond_cxl_root_lock(port);
+	rc = add_dport(port, dport);
+	cond_cxl_root_unlock(port);
+	if (rc)
+		return ERR_PTR(rc);
+
+	if (dev_is_pci(dport_dev))
+		dport->link_latency = cxl_pci_get_latency(to_pci_dev(dport_dev));
+
+	rc = sysfs_create_link(&port->dev.kobj, &dport_dev->kobj, link_name);
+	if (rc) {
+		remove_dport(dport);
+		return ERR_PTR(rc);
+	}
+
+	cxl_debugfs_create_dport_dir(dport);
+
+	return dport;
+}
+
+static struct cxl_dport *register_or_free_dport(struct cxl_dport *dport)
+{
+	struct cxl_dport *result = __register_dport(dport);
+
+	if (IS_ERR(result))
+		kfree(dport);
+	return result;
+}
+
+static struct cxl_dport *__cxl_add_dport(struct cxl_port *port,
+					 struct device *dport_dev, int port_id,
+					 resource_size_t component_reg_phys,
+					 resource_size_t rcrb)
+{
+	int rc;
+
+	struct cxl_dport *dport __free(kfree) =
+		kzalloc(sizeof(*dport), GFP_KERNEL);
 	if (!dport)
 		return ERR_PTR(-ENOMEM);
 
@@ -1175,49 +1205,11 @@ __devm_cxl_add_dport(struct cxl_port *port, struct device *dport_dev,
 		dev_dbg(dport_dev, "Component Registers found for dport: %pa\n",
 			&component_reg_phys);
 
-	cond_cxl_root_lock(port);
-	rc = add_dport(port, dport);
-	cond_cxl_root_unlock(port);
-	if (rc)
-		return ERR_PTR(rc);
-
-	/*
-	 * Setup port register if this is the first dport showed up. Having
-	 * a dport also means that there is at least 1 active link.
-	 */
-	if (port->nr_dports == 1 &&
-	    port->component_reg_phys != CXL_RESOURCE_NONE) {
-		rc = cxl_port_setup_regs(port, port->component_reg_phys);
-		if (rc) {
-			xa_erase(&port->dports, (unsigned long)dport->dport_dev);
-			return ERR_PTR(rc);
-		}
-		port->component_reg_phys = CXL_RESOURCE_NONE;
-	}
-
-	get_device(dport_dev);
-	rc = devm_add_action_or_reset(host, cxl_dport_remove, dport);
-	if (rc)
-		return ERR_PTR(rc);
-
-	rc = sysfs_create_link(&port->dev.kobj, &dport_dev->kobj, link_name);
-	if (rc)
-		return ERR_PTR(rc);
-
-	rc = devm_add_action_or_reset(host, cxl_dport_unlink, dport);
-	if (rc)
-		return ERR_PTR(rc);
-
-	if (dev_is_pci(dport_dev))
-		dport->link_latency = cxl_pci_get_latency(to_pci_dev(dport_dev));
-
-	cxl_debugfs_create_dport_dir(dport);
-
-	return dport;
+	return register_or_free_dport(no_free_ptr(dport));
 }
 
 /**
- * devm_cxl_add_dport - append VH downstream port data to a cxl_port
+ * cxl_add_dport - append VH downstream port data to a cxl_port
  * @port: the cxl_port that references this dport
  * @dport_dev: firmware or PCI device representing the dport
  * @port_id: identifier for this dport in a decoder's target list
@@ -1227,14 +1219,13 @@ __devm_cxl_add_dport(struct cxl_port *port, struct device *dport_dev,
  * either the port's host (for root ports), or the port itself (for
  * switch ports)
  */
-struct cxl_dport *devm_cxl_add_dport(struct cxl_port *port,
-				     struct device *dport_dev, int port_id,
-				     resource_size_t component_reg_phys)
+struct cxl_dport *cxl_add_dport(struct cxl_port *port, struct device *dport_dev,
+				int port_id, resource_size_t component_reg_phys)
 {
 	struct cxl_dport *dport;
 
-	dport = __devm_cxl_add_dport(port, dport_dev, port_id,
-				     component_reg_phys, CXL_RESOURCE_NONE);
+	dport = __cxl_add_dport(port, dport_dev, port_id, component_reg_phys,
+				CXL_RESOURCE_NONE);
 	if (IS_ERR(dport)) {
 		dev_dbg(dport_dev, "failed to add dport to %s: %ld\n",
 			dev_name(&port->dev), PTR_ERR(dport));
@@ -1245,10 +1236,10 @@ struct cxl_dport *devm_cxl_add_dport(struct cxl_port *port,
 
 	return dport;
 }
-EXPORT_SYMBOL_NS_GPL(devm_cxl_add_dport, "CXL");
+EXPORT_SYMBOL_NS_GPL(cxl_add_dport, "CXL");
 
 /**
- * devm_cxl_add_rch_dport - append RCH downstream port data to a cxl_port
+ * cxl_add_rch_dport - append RCH downstream port data to a cxl_port
  * @port: the cxl_port that references this dport
  * @dport_dev: firmware or PCI device representing the dport
  * @port_id: identifier for this dport in a decoder's target list
@@ -1256,9 +1247,9 @@ EXPORT_SYMBOL_NS_GPL(devm_cxl_add_dport, "CXL");
  *
  * See CXL 3.0 9.11.8 CXL Devices Attached to an RCH
  */
-struct cxl_dport *devm_cxl_add_rch_dport(struct cxl_port *port,
-					 struct device *dport_dev, int port_id,
-					 resource_size_t rcrb)
+struct cxl_dport *cxl_add_rch_dport(struct cxl_port *port,
+				    struct device *dport_dev, int port_id,
+				    resource_size_t rcrb)
 {
 	struct cxl_dport *dport;
 
@@ -1267,8 +1258,8 @@ struct cxl_dport *devm_cxl_add_rch_dport(struct cxl_port *port,
 		return ERR_PTR(-EINVAL);
 	}
 
-	dport = __devm_cxl_add_dport(port, dport_dev, port_id,
-				     CXL_RESOURCE_NONE, rcrb);
+	dport = __cxl_add_dport(port, dport_dev, port_id, CXL_RESOURCE_NONE,
+				rcrb);
 	if (IS_ERR(dport)) {
 		dev_dbg(dport_dev, "failed to add RCH dport to %s: %ld\n",
 			dev_name(&port->dev), PTR_ERR(dport));
@@ -1279,7 +1270,7 @@ struct cxl_dport *devm_cxl_add_rch_dport(struct cxl_port *port,
 
 	return dport;
 }
-EXPORT_SYMBOL_NS_GPL(devm_cxl_add_rch_dport, "CXL");
+EXPORT_SYMBOL_NS_GPL(cxl_add_rch_dport, "CXL");
 
 static int add_ep(struct cxl_ep *new)
 {
@@ -1439,13 +1430,42 @@ static void delete_switch_port(struct cxl_port *port)
 	devm_release_action(port->dev.parent, unregister_port, port);
 }
 
+static void unlink_dport(void *data)
+{
+	struct cxl_dport *dport = data;
+	struct cxl_port *port = dport->port;
+	char link_name[CXL_TARGET_STRLEN];
+
+	sprintf(link_name, "dport%d", dport->port_id);
+	sysfs_remove_link(&port->dev.kobj, link_name);
+	remove_dport(dport);
+	kfree(dport);
+}
+
+int cxl_dport_autoremove(struct cxl_dport *dport)
+{
+	struct cxl_port *port = dport->port;
+	struct device *host;
+
+	if (is_cxl_root(port))
+		host = port->uport_dev;
+	else
+		host = &port->dev;
+
+	return devm_add_action_or_reset(host, unlink_dport, dport);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_dport_autoremove, "CXL");
+
+/*
+ * Note: this only services dynamic removal of mid-level ports, root ports are
+ * always removed by the platform driver (e.g. cxl_acpi). @host can be
+ * hard-coded to &port->dev.
+ */
 static void del_dport(struct cxl_dport *dport)
 {
 	struct cxl_port *port = dport->port;
 
-	devm_release_action(&port->dev, cxl_dport_unlink, dport);
-	devm_release_action(&port->dev, cxl_dport_remove, dport);
-	devm_kfree(&port->dev, dport);
+	devm_release_action(&port->dev, unlink_dport, dport);
 }
 
 static void del_dports(struct cxl_port *port)
@@ -1597,10 +1617,24 @@ static int update_decoder_targets(struct device *dev, void *data)
 	return 0;
 }
 
-DEFINE_FREE(del_cxl_dport, struct cxl_dport *, if (!IS_ERR_OR_NULL(_T)) del_dport(_T))
+static struct cxl_port *cxl_port_open_group(struct cxl_port *port)
+{
+	if (!devres_open_group(&port->dev, port, GFP_KERNEL))
+		return ERR_PTR(-ENOMEM);
+	return port;
+}
+DEFINE_FREE(cxl_port_release_group, struct cxl_port *,
+	if (!IS_ERR_OR_NULL(_T)) devres_release_group(&(_T)->dev, _T))
+
+static void cxl_port_remove_group(struct cxl_port *port)
+{
+	devres_remove_group(&port->dev, port);
+}
+
 static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 					    struct device *dport_dev)
 {
+	struct cxl_dport *new_dport;
 	struct cxl_dport *dport;
 	int rc;
 
@@ -1615,29 +1649,47 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 		return ERR_PTR(-EBUSY);
 	}
 
-	struct cxl_dport *new_dport __free(del_cxl_dport) =
-		devm_cxl_add_dport_by_dev(port, dport_dev);
-	if (IS_ERR(new_dport))
-		return new_dport;
+	/*
+	 * With the first dport arrival it is now safe to start looking at
+	 * component registers. Be careful to not strand resources if dport
+	 * creation ultimately fails.
+	 */
+	struct cxl_port *port_group __free(cxl_port_release_group) =
+		cxl_port_open_group(port);
+	if (IS_ERR(port_group))
+		return ERR_CAST(port_group);
 
-	cxl_switch_parse_cdat(new_dport);
-
-	if (ida_is_empty(&port->decoder_ida)) {
+	if (port->nr_dports == 0) {
 		rc = devm_cxl_switch_port_decoders_setup(port);
 		if (rc)
 			return ERR_PTR(rc);
-		dev_dbg(&port->dev, "first dport%d:%s added with decoders\n",
-			new_dport->port_id, dev_name(dport_dev));
-		return no_free_ptr(new_dport);
+		/*
+		 * Note, when nr_dports returns to zero the port is unregistered
+		 * and triggers cleanup. I.e. no need for open-coded release
+		 * action on dport removal. See cxl_detach_ep() for that logic.
+		 */
 	}
+
+	new_dport = cxl_add_dport_by_dev(port, dport_dev);
+	if (IS_ERR(new_dport))
+		return new_dport;
+
+	rc = cxl_dport_autoremove(new_dport);
+	if (rc)
+		return ERR_PTR(rc);
+
+	cxl_switch_parse_cdat(new_dport);
+
+	/* group tracking no longer needed, dport successfully added */
+	cxl_port_remove_group(no_free_ptr(port_group));
+
+	dev_dbg(&port->dev, "dport[%d] id:%d dport_dev: %s added\n",
+		port->nr_dports - 1, new_dport->port_id, dev_name(dport_dev));
 
 	/* New dport added, update the decoder targets */
 	device_for_each_child(&port->dev, new_dport, update_decoder_targets);
 
-	dev_dbg(&port->dev, "dport%d:%s added\n", new_dport->port_id,
-		dev_name(dport_dev));
-
-	return no_free_ptr(new_dport);
+	return new_dport;
 }
 
 static struct cxl_dport *devm_cxl_create_port(struct device *ep_dev,
