@@ -158,8 +158,6 @@ EXPORT_SYMBOL_NS_GPL(cxl_unmask_proto_interrupts, "CXL");
 
 static void cxl_dport_map_ras(struct cxl_dport *dport)
 {
-	dev_err(dport->dport_dev, "%s():%d: Enter\n", __func__, __LINE__);
-
 	struct cxl_register_map *map = &dport->reg_map;
 	struct device *dev = dport->dport_dev;
 
@@ -178,8 +176,6 @@ static void cxl_dport_map_ras(struct cxl_dport *dport)
  */
 void devm_cxl_dport_ras_setup(struct cxl_dport *dport)
 {
-	dev_err(dport->dport_dev, "%s():%d: Enter\n", __func__, __LINE__);
-
 	dport->reg_map.host = &dport->port->dev;
 	cxl_dport_map_ras(dport);
 
@@ -198,8 +194,6 @@ EXPORT_SYMBOL_NS_GPL(devm_cxl_dport_ras_setup, "CXL");
 
 void devm_cxl_port_ras_setup(struct cxl_port *port)
 {
-	dev_err(&port->dev, "%s():%d: Enter\n", __func__, __LINE__);
-
 	struct cxl_register_map *map = &port->reg_map;
 
 	map->host = &port->dev;

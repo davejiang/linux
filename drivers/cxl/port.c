@@ -260,8 +260,6 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 	struct cxl_dport *dport;
 	int rc;
 
-	dev_err(dport_dev, "%s():%d: Enter\n", __func__, __LINE__);
-
 	dport = cxl_find_dport_by_dev(port, dport_dev);
 	if (dport) {
 		dev_dbg(&port->dev, "dport%d:%s already exists\n",
@@ -286,12 +284,9 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 			return ERR_PTR(rc);
 
 		rc = devm_cxl_switch_port_decoders_setup(port);
-		if (rc) {
-			dev_err(dport_dev, "%s():%d: Failed rc=%#x\n", __func__, __LINE__, rc);
+		if (rc)
 			return ERR_PTR(rc);
-		}
 
-		dev_err(dport_dev, "%s():%d: -\n", __func__, __LINE__);
 		/*
 		 * RAS setup is optional, either driver operation can continue
 		 * on failure, or the device does not implement RAS registers.
@@ -303,8 +298,6 @@ static struct cxl_dport *cxl_port_add_dport(struct cxl_port *port,
 		 * and triggers cleanup. I.e. no need for open-coded release
 		 * action on dport removal. See cxl_detach_ep() for that logic.
 		 */
-	} else {
-		dev_err(dport_dev, "%s():%d: nr_dports != 0\n", __func__, __LINE__);
 	}
 
 	new_dport = cxl_add_dport_by_dev(port, dport_dev);
