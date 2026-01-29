@@ -37,6 +37,7 @@
 #include <linux/node_private.h>
 #include <linux/module.h>
 #include <linux/node.h>
+#include <linux/node_private.h>
 
 #include <asm/tlbflush.h>
 
@@ -1167,7 +1168,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	move_pfn_range_to_zone(zone, pfn, nr_pages, NULL, MIGRATE_MOVABLE,
 			       true);
 
-	if (!node_state(nid, N_MEMORY)) {
+	if (!node_state(nid, N_MEMORY) && !node_state(nid, N_MEMORY_PRIVATE)) {
 		/* Adding memory to the node for the first time */
 		node_arg.nid = nid;
 		ret = node_notify(NODE_ADDING_FIRST_MEMORY, &node_arg);
@@ -1202,13 +1203,20 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	online_pages_range(pfn, nr_pages);
 	adjust_present_page_count(pfn_to_page(pfn), group, nr_pages);
 
+	/*
+	 * N_MEMORY and N_MEMORY_PRIVATE are mutually exclusive, determine
+	 * which is correct based on whether the pgdat->private is set.
+	 */
 	if (node_arg.nid >= 0)
-		node_set_state(nid, N_MEMORY);
+		node_set_state(nid, pgdat_is_private(NODE_DATA(nid)) ?
+				    N_MEMORY_PRIVATE : N_MEMORY);
 	/*
 	 * Check whether we are adding normal memory to the node for the first
 	 * time.
 	 */
-	if (!node_state(nid, N_NORMAL_MEMORY) && zone_idx(zone) <= ZONE_NORMAL)
+	if (!node_state(nid, N_MEMORY_PRIVATE) &&
+	    !node_state(nid, N_NORMAL_MEMORY) &&
+	    zone_idx(zone) <= ZONE_NORMAL)
 		node_set_state(nid, N_NORMAL_MEMORY);
 
 	if (need_zonelists_rebuild)
@@ -1228,8 +1236,11 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	kswapd_run(nid);
-	kcompactd_run(nid);
+	/* Private nodes opt-out of reclaim/compaction by default */
+	if (!pgdat_is_private(NODE_DATA(nid))) {
+		kswapd_run(nid);
+		kcompactd_run(nid);
+	}
 
 	if (node_arg.nid >= 0)
 		/* First memory added successfully. Notify consumers. */
@@ -1727,6 +1738,65 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 }
 EXPORT_SYMBOL_GPL(add_memory_driver_managed);
 
+/**
+ * add_private_memory_driver_managed - add driver-managed N_MEMORY_PRIVATE memory
+ * @nid: NUMA node ID (or memory group ID when MHP_NID_IS_MGID is set)
+ * @start: Start physical address
+ * @size: Size in bytes
+ * @resource_name: "System RAM ($DRIVER)" format
+ * @mhp_flags: Memory hotplug flags
+ * @online_type: MMOP_* online type
+ * @np: Driver-owned node_private structure
+ *
+ * Registers node_private first (setting pgdat->private), then hotplugs the
+ * memory. N_MEMORY_PRIVATE is set by online_pages() when the first memory
+ * block is onlined, based on pgdat->private.
+ *
+ * When MHP_NID_IS_MGID is set, resolves the memory group ID to the real
+ * NUMA node ID for node_private_register().
+ *
+ * On failure, unregisters the node_private.
+ */
+int add_private_memory_driver_managed(int nid, u64 start, u64 size,
+				      const char *resource_name,
+				      mhp_t mhp_flags, enum mmop online_type,
+				      struct node_private *np)
+{
+	struct memory_group *group;
+	int real_nid = nid;
+	int rc;
+
+	if (!np)
+		return -EINVAL;
+
+	/*
+	 * When MHP_NID_IS_MGID is set, nid is a memory group ID, not a
+	 * NUMA node. Resolve the real nid for node_private_register().
+	 */
+	if (mhp_flags & MHP_NID_IS_MGID) {
+		group = memory_group_find_by_id(nid);
+		if (!group)
+			return -EINVAL;
+		real_nid = group->nid;
+	}
+
+	/* Register private node first - stores np in pgdat and sets pgdat->private */
+	rc = node_private_register(real_nid, np);
+	if (rc)
+		return rc;
+
+	/* Hotplug the memory */
+	rc = __add_memory_driver_managed(nid, start, size, resource_name,
+					 mhp_flags, online_type);
+	if (rc) {
+		node_private_unregister(real_nid);
+		return rc;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(add_private_memory_driver_managed);
+
 /*
  * Platforms should define arch_get_mappable_range() that provides
  * maximum possible addressable physical memory range for which the
@@ -2043,7 +2113,7 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	/*
 	 * Check whether the node will have no present pages after we offline
 	 * 'nr_pages' more. If so, we know that the node will become empty, and
-	 * so we will clear N_MEMORY for it.
+	 * so we will clear N_MEMORY(_PRIVATE) for it.
 	 */
 	if (nr_pages >= pgdat->node_present_pages) {
 		node_arg.nid = node;
@@ -2148,8 +2218,10 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 	 * Make sure to mark the node as memory-less before rebuilding the zone
 	 * list. Otherwise this node would still appear in the fallback lists.
 	 */
-	if (node_arg.nid >= 0)
+	if (node_arg.nid >= 0) {
 		node_clear_state(node, N_MEMORY);
+		node_clear_state(node, N_MEMORY_PRIVATE);
+	}
 	if (!populated_zone(zone)) {
 		zone_pcp_reset(zone);
 		build_all_zonelists(NULL);
@@ -2210,6 +2282,15 @@ static int count_memory_range_altmaps_cb(struct memory_block *mem, void *arg)
 	if (mem->altmap)
 		*num_altmaps += 1;
 
+	return 0;
+}
+
+static int collect_memblock_nodes_cb(struct memory_block *mem, void *arg)
+{
+	nodemask_t *nodes = arg;
+
+	if (mem->nid != NUMA_NO_NODE)
+		node_set(mem->nid, *nodes);
 	return 0;
 }
 
@@ -2448,8 +2529,9 @@ static int try_reonline_memory_block(struct memory_block *mem, void *arg)
 int offline_and_remove_memory(u64 start, u64 size)
 {
 	const unsigned long mb_count = size / memory_block_size_bytes();
+	nodemask_t nodes = NODE_MASK_NONE;
 	uint8_t *online_types, *tmp;
-	int rc;
+	int nid, rc;
 
 	if (!IS_ALIGNED(start, memory_block_size_bytes()) ||
 	    !IS_ALIGNED(size, memory_block_size_bytes()) || !size)
@@ -2472,6 +2554,13 @@ int offline_and_remove_memory(u64 start, u64 size)
 	memset(online_types, MMOP_OFFLINE, mb_count);
 
 	lock_device_hotplug();
+
+	/*
+	 * Record the node(s) this range spans while the memory blocks are still
+	 * present, so we can drop any private-node registration after removal.
+	 * A contiguous range is not guaranteed to be single-node.
+	 */
+	walk_memory_blocks(start, size, &nodes, collect_memblock_nodes_cb);
 
 	tmp = online_types;
 	rc = walk_memory_blocks(start, size, &tmp, try_offline_memory_block);
@@ -2496,6 +2585,15 @@ int offline_and_remove_memory(u64 start, u64 size)
 				   try_reonline_memory_block);
 	}
 	unlock_device_hotplug();
+
+	/*
+	 * If this emptied the last memory of a private node, offline_pages()
+	 * has cleared N_MEMORY_PRIVATE; drop node_private registration here.
+	 * No-op for non-private nodes.
+	 */
+	if (!rc)
+		for_each_node_mask(nid, nodes)
+			node_private_unregister(nid);
 
 	kfree(online_types);
 	return rc;
@@ -2524,9 +2622,10 @@ EXPORT_SYMBOL_GPL(offline_and_remove_memory);
  */
 int offline_and_remove_memory_ranges(const struct range *ranges, int nr_ranges)
 {
+	nodemask_t nodes = NODE_MASK_NONE;
 	unsigned long mb_total = 0;
 	uint8_t *online_types, *tmp;
-	int i, rc = 0;
+	int i, nid, rc = 0;
 
 	if (!ranges || nr_ranges <= 0)
 		return -EINVAL;
@@ -2553,6 +2652,15 @@ int offline_and_remove_memory_ranges(const struct range *ranges, int nr_ranges)
 	memset(online_types, MMOP_OFFLINE, mb_total);
 
 	lock_device_hotplug();
+
+	/*
+	 * Record the node(s) these ranges span while the memory blocks are
+	 * still present, so we can drop any private-node registration after
+	 * removal.  A range is not guaranteed to be single-node.
+	 */
+	for (i = 0; i < nr_ranges; i++)
+		walk_memory_blocks(ranges[i].start, range_len(&ranges[i]),
+				   &nodes, collect_memblock_nodes_cb);
 
 	/* Phase 1: offline every block in every range. */
 	tmp = online_types;
@@ -2595,8 +2703,18 @@ int offline_and_remove_memory_ranges(const struct range *ranges, int nr_ranges)
 	}
 	unlock_device_hotplug();
 
+	/*
+	 * Drop the node_private registration for any node whose last memory we
+	 * just removed; offline_pages() has already cleared N_MEMORY_PRIVATE.
+	 * No-op for non-private nodes.
+	 */
+	if (!rc)
+		for_each_node_mask(nid, nodes)
+			node_private_unregister(nid);
+
 	kfree(online_types);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(offline_and_remove_memory_ranges);
+
 #endif /* CONFIG_MEMORY_HOTREMOVE */
