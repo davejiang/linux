@@ -22,6 +22,7 @@
 #include <linux/swap.h>
 #include <linux/slab.h>
 #include <linux/memblock.h>
+#include <linux/node_private.h>
 
 static const struct bus_type node_subsys = {
 	.name = "node",
@@ -868,6 +869,116 @@ void register_memory_blocks_under_node_hotplug(int nid, unsigned long start_pfn,
 			   (void *)&nid, register_mem_block_under_node_hotplug);
 	return;
 }
+
+static DEFINE_MUTEX(node_private_lock);
+
+/**
+ * node_private_register - Register a private node
+ * @nid: Node identifier
+ * @np: The node_private structure (driver-allocated, driver-owned)
+ *
+ * Register an owner for a private node. If an owner is already registered
+ * (different np), return -EBUSY.
+ *
+ * Re-registration with the same np is allowed.
+ *
+ * The caller owns the node_private memory and must ensure it remains valid
+ * until after node_private_unregister() returns.
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int node_private_register(int nid, struct node_private *np)
+{
+	struct node_private *existing;
+	pg_data_t *pgdat;
+	int ret = 0;
+
+	if (!np || !node_possible(nid))
+		return -EINVAL;
+
+	mutex_lock(&node_private_lock);
+	mem_hotplug_begin();
+
+	/* N_MEMORY_PRIVATE and N_MEMORY are mutually exclusive */
+	if (node_state(nid, N_MEMORY)) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	pgdat = NODE_DATA(nid);
+	existing = rcu_dereference_protected(pgdat->node_private,
+					     lockdep_is_held(&node_private_lock));
+
+	/* If it exists, restrict to single owner */
+	if (existing) {
+		if (existing != np)
+			ret = -EBUSY;
+		goto out;
+	}
+
+	rcu_assign_pointer(pgdat->node_private, np);
+out:
+	mem_hotplug_done();
+	mutex_unlock(&node_private_lock);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(node_private_register);
+
+/**
+ * node_private_unregister - Unregister a private node
+ * @nid: Node identifier
+ *
+ * Unregister the driver from a private node.
+ *
+ * Only succeeds if all memory has been offlined (N_MEMORY_PRIVATE cleared).
+ *
+ * N_MEMORY_PRIVATE state is cleared by offline_pages() when the last
+ * memory is offlined, not by this function.
+ *
+ * After this returns, the node_private pointer is no longer visible and
+ * an RCU grace period has elapsed, so the driver may free its context.
+ *
+ * Return: 0 if unregistered, -EBUSY if N_MEMORY_PRIVATE is still set.
+ */
+int node_private_unregister(int nid)
+{
+	struct node_private *np;
+	pg_data_t *pgdat;
+
+	if (!node_possible(nid))
+		return 0;
+
+	mutex_lock(&node_private_lock);
+	mem_hotplug_begin();
+
+	pgdat = NODE_DATA(nid);
+	np = rcu_dereference_protected(pgdat->node_private,
+				       lockdep_is_held(&node_private_lock));
+	if (!np) {
+		mem_hotplug_done();
+		mutex_unlock(&node_private_lock);
+		return 0;
+	}
+
+	/*
+	 * Only unregister if N_MEMORY_PRIVATE is cleared (only occurs when
+	 * the last memory block is offlined in offline_pages())
+	 */
+	if (node_state(nid, N_MEMORY_PRIVATE)) {
+		mem_hotplug_done();
+		mutex_unlock(&node_private_lock);
+		return -EBUSY;
+	}
+
+	rcu_assign_pointer(pgdat->node_private, NULL);
+
+	mem_hotplug_done();
+	mutex_unlock(&node_private_lock);
+
+	synchronize_rcu();
+	return 0;
+}
+EXPORT_SYMBOL_GPL(node_private_unregister);
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 /**
@@ -966,6 +1077,7 @@ static struct node_attr node_state_attr[] = {
 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
 #endif
 	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+	[N_MEMORY_PRIVATE] = _NODE_ATTR(has_private_memory, N_MEMORY_PRIVATE),
 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
 	[N_GENERIC_INITIATOR] = _NODE_ATTR(has_generic_initiator,
 					   N_GENERIC_INITIATOR),
@@ -979,6 +1091,7 @@ static struct attribute *node_state_attrs[] = {
 	&node_state_attr[N_HIGH_MEMORY].attr.attr,
 #endif
 	&node_state_attr[N_MEMORY].attr.attr,
+	&node_state_attr[N_MEMORY_PRIVATE].attr.attr,
 	&node_state_attr[N_CPU].attr.attr,
 	&node_state_attr[N_GENERIC_INITIATOR].attr.attr,
 	NULL

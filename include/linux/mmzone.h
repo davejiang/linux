@@ -26,6 +26,8 @@
 #include <linux/sizes.h>
 #include <asm/page.h>
 
+struct node_private;
+
 /* Free memory management - zoned buddy allocator.  */
 #ifndef CONFIG_ARCH_FORCE_MAX_ORDER
 #define MAX_PAGE_ORDER 10
@@ -1599,11 +1601,24 @@ typedef struct pglist_data {
 	atomic_long_t		vm_stat[NR_VM_NODE_STAT_ITEMS];
 #ifdef CONFIG_NUMA
 	struct memory_tier __rcu *memtier;
+	struct node_private __rcu *node_private;
 #endif
 #ifdef CONFIG_MEMORY_FAILURE
 	struct memory_failure_stats mf_stats;
 #endif
 } pg_data_t;
+
+#ifdef CONFIG_NUMA
+static inline bool pgdat_is_private(pg_data_t *pgdat)
+{
+	return !!pgdat->node_private;
+}
+#else
+static inline bool pgdat_is_private(pg_data_t *pgdat)
+{
+	return false;
+}
+#endif
 
 #define node_present_pages(nid)	(NODE_DATA(nid)->node_present_pages)
 #define node_spanned_pages(nid)	(NODE_DATA(nid)->node_spanned_pages)
