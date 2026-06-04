@@ -2483,4 +2483,102 @@ int offline_and_remove_memory(u64 start, u64 size)
 	return rc;
 }
 EXPORT_SYMBOL_GPL(offline_and_remove_memory);
+
+/**
+ * offline_and_remove_memory_ranges - offline and remove multiple memory ranges
+ * @ranges: array of physical address ranges to offline and remove
+ * @nr_ranges: number of entries in @ranges
+ *
+ * Offline and remove several memory ranges as one operation, serialized
+ * against other hotplug operations by a single lock_device_hotplug().
+ *
+ * Unlike calling offline_and_remove_memory() in a loop, this offlines *all*
+ * ranges before removing any of them.  If offlining any range fails, the
+ * offlining of the ranges processed so far is reverted and nothing is
+ * removed, leaving every range online as it was before the call.  This gives
+ * callers all-or-nothing semantics for the offline step, so a failed unplug
+ * does not leave a device split between online and removed ranges.
+ *
+ * Each range must be memory-block aligned in start and size.
+ *
+ * Return: 0 on success, negative errno otherwise.  On failure no range has
+ * been removed.
+ */
+int offline_and_remove_memory_ranges(const struct range *ranges, int nr_ranges)
+{
+	unsigned long mb_total = 0;
+	uint8_t *online_types, *tmp;
+	int i, rc = 0;
+
+	if (!ranges || nr_ranges <= 0)
+		return -EINVAL;
+
+	for (i = 0; i < nr_ranges; i++) {
+		u64 start = ranges[i].start;
+		u64 size = range_len(&ranges[i]);
+
+		if (!IS_ALIGNED(start, memory_block_size_bytes()) ||
+		    !IS_ALIGNED(size, memory_block_size_bytes()) || !size)
+			return -EINVAL;
+		mb_total += size / memory_block_size_bytes();
+	}
+
+	/*
+	 * Remember the old online type of every memory block across all ranges,
+	 * so we can revert if offlining a later block fails.  All entries start
+	 * as MMOP_OFFLINE so blocks we never touched are skipped on rollback.
+	 */
+	online_types = kmalloc_array(mb_total, sizeof(*online_types),
+				     GFP_KERNEL);
+	if (!online_types)
+		return -ENOMEM;
+	memset(online_types, MMOP_OFFLINE, mb_total);
+
+	lock_device_hotplug();
+
+	/* Phase 1: offline every block in every range. */
+	tmp = online_types;
+	for (i = 0; i < nr_ranges; i++) {
+		rc = walk_memory_blocks(ranges[i].start, range_len(&ranges[i]),
+					&tmp, try_offline_memory_block);
+		if (rc)
+			break;
+	}
+
+	/*
+	 * Phase 2: only once everything is offline, remove it.  This cannot
+	 * fail as the memory can no longer be onlined in the meantime.  If a
+	 * future caller ever does break that assumption, the per-node cleanup
+	 * below (gated on !rc) would not match a partial removal across a
+	 * multi-node range set - so trip a warning rather than fail silently.
+	 */
+	if (!rc) {
+		for (i = 0; i < nr_ranges; i++) {
+			rc = try_remove_memory(ranges[i].start,
+					       range_len(&ranges[i]));
+			if (WARN_ON_ONCE(rc)) {
+				pr_err("%s: Failed to remove memory: %d",
+				       __func__, rc);
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Roll back the offlining if anything failed.  Blocks we never offlined
+	 * are marked MMOP_OFFLINE and skipped by try_reonline_memory_block().
+	 */
+	if (rc) {
+		tmp = online_types;
+		for (i = 0; i < nr_ranges; i++)
+			walk_memory_blocks(ranges[i].start,
+					   range_len(&ranges[i]), &tmp,
+					   try_reonline_memory_block);
+	}
+	unlock_device_hotplug();
+
+	kfree(online_types);
+	return rc;
+}
+EXPORT_SYMBOL_GPL(offline_and_remove_memory_ranges);
 #endif /* CONFIG_MEMORY_HOTREMOVE */
