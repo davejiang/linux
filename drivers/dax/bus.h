@@ -36,6 +36,7 @@ enum dax_driver_type {
 	DAXDRV_KMEM_TYPE,
 	DAXDRV_DEVICE_TYPE,
 	DAXDRV_FSDEV_TYPE,
+	DAXDRV_ANON_TYPE,
 };
 
 struct dax_device_driver {
