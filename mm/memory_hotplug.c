@@ -1236,8 +1236,11 @@ int online_pages(unsigned long pfn, unsigned long nr_pages,
 	/* reinitialise watermarks and update pcp limits */
 	init_per_zone_wmark_min();
 
-	/* Private nodes opt-out of reclaim/compaction by default */
-	if (!pgdat_is_private(NODE_DATA(nid))) {
+	/*
+	 * Start the reclaim/compaction daemons for any node the mm reclaims:
+	 * ordinary nodes, and private nodes whose driver opted into reclaim.
+	 */
+	if (node_allows_reclaim(nid)) {
 		kswapd_run(nid);
 		kcompactd_run(nid);
 	}

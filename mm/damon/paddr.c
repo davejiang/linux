@@ -257,8 +257,8 @@ static unsigned long damon_pa_pageout(struct damon_region *r,
 			continue;
 		}
 
-		/* private node memory is not reclaimable by default */
-		if (folio_is_private_node(folio))
+		/* DAMOS pageout is reclaim; gate a private node on CAP_RECLAIM */
+		if (!node_allows_reclaim(folio_nid(folio)))
 			goto put_folio;
 
 		if (damos_pa_filter_out(s, folio))

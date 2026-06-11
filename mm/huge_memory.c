@@ -2305,7 +2305,7 @@ bool madvise_free_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 
 	folio = pmd_folio(orig_pmd);
 
-	if (folio_is_private_node(folio))
+	if (!node_allows_reclaim(folio_nid(folio)))
 		goto out;
 
 	/*

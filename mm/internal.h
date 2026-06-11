@@ -37,6 +37,38 @@ static inline bool page_is_private_managed(struct page *page)
 }
 
 /*
+ * folio_allows_madvise() - may madvise() reclaim hints act on this folio?
+ *
+ * madvise reclaim hints (COLD/PAGEOUT/FREE) are userland-driven reclaim, so
+ * they follow the reclaim opt-in: false for ZONE_DEVICE and for N_MEMORY_PRIVATE
+ * nodes without CAP_RECLAIM, true for all other normal folios.
+ */
+static inline bool folio_allows_madvise(struct folio *folio)
+{
+	return !folio_is_zone_device(folio) &&
+	       node_allows_reclaim(folio_nid(folio));
+}
+
+/*
+ * folio_allows_collapse() - may khugepaged collapse this folio into a THP?
+ *
+ * Collapse allocates a new huge folio and migrates the base pages into it -
+ * the same make-room/relocate churn as compaction, so it follows the reclaim
+ * opt-in: never for ZONE_DEVICE, and for an N_MEMORY_PRIVATE folio only where
+ * the node opted into CAP_RECLAIM.  True for all other folios.
+ */
+static inline bool folio_allows_collapse(struct folio *folio)
+{
+	return !folio_is_zone_device(folio) &&
+	       node_allows_reclaim(folio_nid(folio));
+}
+
+static inline bool page_allows_collapse(struct page *page)
+{
+	return folio_allows_collapse(page_folio(page));
+}
+
+/*
  * folio_allows_longterm_pin() - may this folio be long-term GUP-pinned?
  *
  * checks folio_is_longterm_pinnable() rules plus private node permissions.

@@ -6551,7 +6551,7 @@ static void __setup_per_zone_wmarks(void)
 		u64 tmp;
 
 		spin_lock_irqsave(&zone->lock, flags);
-		if (node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)) {
+		if (!node_allows_reclaim(zone_to_nid(zone))) {
 			zone->_watermark[WMARK_MIN] = 0;
 			zone->_watermark[WMARK_LOW] = 0;
 			zone->_watermark[WMARK_HIGH] = 0;
@@ -6563,11 +6563,14 @@ static void __setup_per_zone_wmarks(void)
 
 		tmp = (u64)pages_min * zone_managed_pages(zone);
 		tmp = div64_ul(tmp, lowmem_pages);
-		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE) {
+		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE ||
+		    node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)) {
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
 			 * need highmem and movable zones pages, so cap pages_min
-			 * to a small  value here.
+			 * to a small  value here.  Private nodes are capped too:
+			 * they sit outside lowmem_pages, so size their floor to
+			 * themselves, not the shared DRAM reserve.
 			 *
 			 * The WMARK_HIGH-WMARK_LOW and (WMARK_LOW-WMARK_MIN)
 			 * deltas control async page reclaim, and so should

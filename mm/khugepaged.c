@@ -716,7 +716,7 @@ static enum scan_result __collapse_huge_page_isolate(struct vm_area_struct *vma,
 			goto out;
 		}
 		page = vm_normal_page(vma, addr, pteval);
-		if (unlikely(!page) || unlikely(page_is_private_managed(page))) {
+		if (unlikely(!page) || unlikely(!page_allows_collapse(page))) {
 			result = SCAN_PAGE_NULL;
 			goto out;
 		}
@@ -1251,9 +1251,22 @@ static enum scan_result alloc_charge_folio(struct folio **foliop, struct mm_stru
 	gfp_t gfp = (cc->is_khugepaged ? alloc_hugepage_khugepaged_gfpmask() :
 		     GFP_TRANSHUGE);
 	int node = collapse_find_target_node(cc);
+	/*
+	 * Resolve the zonelist from the target node.  Select ZONELIST_PRIVATE
+	 * only for a private (N_MEMORY_PRIVATE) node that opted into reclaim
+	 * (CAP_RECLAIM) - this is the isolation gate on the *allocation*, so it
+	 * covers every collapse path, including file/shmem collapse whose scan
+	 * does not run the per-page page_allows_collapse() check.  A private node
+	 * without the opt-in resolves to the default list (which excludes private
+	 * zones), so the collapse cannot land there; ordinary nodes use the
+	 * default list too.  cc->alloc_nmask already confines to the target.
+	 */
+	enum alloc_zonelist zlsel = (node_state(node, N_MEMORY_PRIVATE) &&
+				     node_allows_reclaim(node)) ?
+		ALLOC_ZONELIST_PRIVATE : ALLOC_ZONELIST_DEFAULT;
 	struct folio *folio;
 
-	folio = __folio_alloc(gfp, order, node, &cc->alloc_nmask);
+	folio = __folio_alloc_zonelist(gfp, order, node, &cc->alloc_nmask, zlsel);
 	if (!folio) {
 		*foliop = NULL;
 		if (is_pmd_order(order))
@@ -1700,7 +1713,7 @@ static enum scan_result collapse_scan_pmd(struct mm_struct *mm,
 		}
 
 		page = vm_normal_page(vma, addr, pteval);
-		if (unlikely(!page) || unlikely(page_is_private_managed(page))) {
+		if (unlikely(!page) || unlikely(!page_allows_collapse(page))) {
 			result = SCAN_PAGE_NULL;
 			goto out_unmap;
 		}
@@ -1956,7 +1969,7 @@ static enum scan_result try_collapse_pte_mapped_thp(struct mm_struct *mm, unsign
 		}
 
 		page = vm_normal_page(vma, addr, ptent);
-		if (WARN_ON_ONCE(page && page_is_private_managed(page)))
+		if (WARN_ON_ONCE(page && !page_allows_collapse(page)))
 			page = NULL;
 		/*
 		 * Note that uprobe, debugger, or MAP_PRIVATE may change the
