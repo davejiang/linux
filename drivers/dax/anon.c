@@ -381,10 +381,11 @@ static ssize_t name##_store(struct device *dev,				\
 }									\
 static DEVICE_ATTR_RW(name)
 
-/* Opt-in toggles are appended here by the per-service patches. */
+ANON_DAX_CAP_ATTR(reclaim, NODE_PRIVATE_CAP_RECLAIM);
 
 static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_hotplug.attr,
+	&dev_attr_reclaim.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(anon_dax);
