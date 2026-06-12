@@ -478,6 +478,8 @@ static ssize_t adistance_store(struct device *dev, struct device_attribute *attr
 }
 static DEVICE_ATTR_RW(adistance);
 
+ANON_DAX_CAP_ATTR(ltpin, NODE_PRIVATE_CAP_LTPIN);
+
 static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_hotplug.attr,
 	&dev_attr_reclaim.attr,
@@ -485,6 +487,7 @@ static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_hotunplug.attr,
 	&dev_attr_tiering.attr,
 	&dev_attr_adistance.attr,
+	&dev_attr_ltpin.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(anon_dax);
