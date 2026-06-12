@@ -58,7 +58,9 @@
 #include <linux/delayacct.h>
 #include <linux/init.h>
 #include <linux/writeback.h>
+#include <linux/cpuset.h>
 #include <linux/memcontrol.h>
+#include <linux/mempolicy.h>
 #include <linux/mmu_notifier.h>
 #include <linux/leafops.h>
 #include <linux/elf.h>
@@ -6648,6 +6650,7 @@ static vm_fault_t sanitize_fault_flags(struct vm_area_struct *vma,
  * The lock may have been released depending on flags and our
  * return value.  See filemap_fault() and __folio_lock_or_retry().
  */
+
 vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			   unsigned int flags, struct pt_regs *regs)
 {
