@@ -1957,12 +1957,14 @@ static int do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 		}
 
 		/*
-		 * Private nodes cannot be unplugged via migration, the owning
-		 * service must ensure all folios are free before unplugging.  Such
-		 * a folio will never migrate, so fail the offline outright rather
-		 * than let offline_pages() spin forever retrying it.
+		 * A private node is not migratable by default: its owning
+		 * service must free all folios before unplug.  A node that opted
+		 * into hot-unplug (NODE_PRIVATE_CAP_HOTUNPLUG) is instead drained
+		 * here like any other node - continue to the isolation below.
+		 * Otherwise the folio will never migrate, so fail the offline
+		 * outright rather than let offline_pages() spin forever on it.
 		 */
-		if (folio_is_private_node(folio)) {
+		if (!node_allows_hotunplug(folio_nid(folio))) {
 			WARN_ONCE(1, "hot-unplug on non-migratable node %d pfn %lx\n",
 				  folio_nid(folio), pfn);
 			folio_put(folio);
