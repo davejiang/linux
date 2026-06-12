@@ -33,6 +33,7 @@
 #include <linux/mempolicy.h>
 #include <linux/mutex.h>
 #include <linux/memory_hotplug.h>
+#include <linux/memory-tiers.h>
 #include <linux/node_private.h>
 #include <linux/sched/mm.h>
 #include <linux/string_helpers.h>
@@ -40,6 +41,12 @@
 #include "bus.h"
 
 static const char *anon_dax_name;
+
+#define ANON_DAX_DEFAULT_ADISTANCE	(MEMTIER_ADISTANCE_DRAM * 5)
+
+/* memory_dev_types allocated for demotion-opted-in nodes, freed at module exit. */
+static LIST_HEAD(anon_dax_memory_types);
+static DEFINE_MUTEX(anon_dax_memtype_lock);
 
 /* Hotplug state, driven by the "hotplug" sysfs attribute. */
 enum anon_dax_state {
@@ -67,6 +74,9 @@ static const char * const anon_dax_state_name[] = {
  *	node without a userspace mbind(); NULL until first onlined
  * @np: driver-owned node_private; must outlive the registration, so it lives
  *	here for the device's lifetime
+ * @memtype: memory type assigned while demotion-opted-in (NULL otherwise)
+ * @adistance: abstract distance to register the node's memory type at
+ *             (selects which tier a demotion node lands in)
  * @res: per-range reserved iomem resources (released on remove)
  */
 struct anon_dax_data {
@@ -75,8 +85,10 @@ struct anon_dax_data {
 	unsigned long caps;
 	int mgid;
 	int numa_node;
+	int adistance;
 	struct mempolicy *policy;
 	struct node_private np;
+	struct memory_dev_type *memtype;
 	struct resource *res[];
 };
 
@@ -90,6 +102,29 @@ static int anon_dax_range(struct dev_dax *dev_dax, int i, struct range *r)
 		return -ENOSPC;
 	}
 	return 0;
+}
+
+static int anon_dax_setup_demotion(struct anon_dax_data *data)
+{
+	struct memory_dev_type *memtype;
+	int adist = data->adistance;
+
+	mt_calc_adistance(data->numa_node, &adist);
+	scoped_guard(mutex, &anon_dax_memtype_lock)
+		memtype = mt_find_alloc_memory_type(adist, &anon_dax_memory_types);
+	if (IS_ERR(memtype))
+		return PTR_ERR(memtype);
+	init_node_memory_type(data->numa_node, memtype);
+	data->memtype = memtype;
+	return 0;
+}
+
+static void anon_dax_teardown_demotion(struct anon_dax_data *data)
+{
+	if (!data->memtype)
+		return;
+	clear_node_memory_type(data->numa_node, data->memtype);
+	data->memtype = NULL;
 }
 
 /*
@@ -109,6 +144,13 @@ static int anon_dax_add(struct dev_dax *dev_dax, struct anon_dax_data *data,
 	 */
 	data->np.caps = data->caps;
 
+	/* a tiering node (demotion target) must carry a memory type before onlining */
+	if (data->caps & NODE_PRIVATE_CAP_TIERING) {
+		rc = anon_dax_setup_demotion(data);
+		if (rc)
+			return rc;
+	}
+
 	for (i = 0; i < dev_dax->nr_range; i++) {
 		struct resource *res;
 		struct range range;
@@ -123,7 +165,8 @@ static int anon_dax_add(struct dev_dax *dev_dax, struct anon_dax_data *data,
 				 i, range.start, range.end);
 			if (added)
 				continue;
-			return -EBUSY;
+			rc = -EBUSY;
+			goto err;
 		}
 		/* Leave _BUSY clear so add_memory() can add a child resource. */
 		res->flags = IORESOURCE_SYSTEM_RAM;
@@ -144,12 +187,19 @@ static int anon_dax_add(struct dev_dax *dev_dax, struct anon_dax_data *data,
 			data->res[i] = NULL;
 			if (added)
 				continue;
-			return rc;
+			goto err;
 		}
 		added++;
 	}
 
-	return added ? added : -ENOMEM;
+	if (!added) {
+		rc = -ENOMEM;
+		goto err;
+	}
+	return added;
+err:
+	anon_dax_teardown_demotion(data);
+	return rc;
 }
 
 #ifdef CONFIG_MEMORY_HOTREMOVE
@@ -203,6 +253,7 @@ static int anon_dax_drop(struct dev_dax *dev_dax, struct anon_dax_data *data)
 		return rc;
 	}
 
+	anon_dax_teardown_demotion(data);
 	anon_dax_release_resources(dev_dax, data);
 	return 0;
 }
@@ -387,11 +438,53 @@ ANON_DAX_CAP_ATTR(mempolicy, NODE_PRIVATE_CAP_MEMPOLICY);
 
 ANON_DAX_CAP_ATTR(hotunplug, NODE_PRIVATE_CAP_HOTUNPLUG);
 
+ANON_DAX_CAP_ATTR(tiering, NODE_PRIVATE_CAP_TIERING);
+
+/* adistance lets you select a memory tier for the node (larger = lower) */
+static ssize_t adistance_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct anon_dax_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", data->adistance);
+}
+
+static ssize_t adistance_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t len)
+{
+	struct anon_dax_data *data = dev_get_drvdata(dev);
+	int adist;
+	ssize_t rc;
+
+	rc = kstrtoint(buf, 0, &adist);
+	if (rc)
+		return rc;
+	if (adist <= 0)
+		return -EINVAL;
+
+	rc = mutex_lock_interruptible(&data->lock);
+	if (rc)
+		return rc;
+
+	if (data->state != ANON_DAX_UNPLUGGED)
+		rc = -EBUSY;
+	else {
+		data->adistance = adist;
+		rc = len;
+	}
+
+	mutex_unlock(&data->lock);
+	return rc;
+}
+static DEVICE_ATTR_RW(adistance);
+
 static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_hotplug.attr,
 	&dev_attr_reclaim.attr,
 	&dev_attr_mempolicy.attr,
 	&dev_attr_hotunplug.attr,
+	&dev_attr_tiering.attr,
+	&dev_attr_adistance.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(anon_dax);
@@ -431,6 +524,7 @@ static int dev_dax_anon_probe(struct dev_dax *dev_dax)
 	mutex_init(&data->lock);
 	data->state = ANON_DAX_UNPLUGGED;
 	data->numa_node = numa_node;
+	data->adistance = ANON_DAX_DEFAULT_ADISTANCE;
 	data->np.owner = data;
 
 	rc = memory_group_register_static(numa_node, PFN_UP(total_len));
@@ -518,6 +612,7 @@ static int __init dax_anon_init(void)
 static void __exit dax_anon_exit(void)
 {
 	dax_driver_unregister(&device_dax_anon_driver);
+	mt_put_memory_types(&anon_dax_memory_types);
 	kfree_const(anon_dax_name);
 }
 
