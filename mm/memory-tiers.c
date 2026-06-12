@@ -7,6 +7,7 @@
 #include <linux/memory-tiers.h>
 #include <linux/notifier.h>
 #include <linux/sched/sysctl.h>
+#include <linux/node_private.h>
 
 #include "internal.h"
 
@@ -317,6 +318,20 @@ void node_get_allowed_targets(pg_data_t *pgdat, nodemask_t *targets)
 	rcu_read_unlock();
 }
 
+/*
+ * The nodes that take part in the tier/demotion hierarchy: all N_MEMORY nodes,
+ * plus N_MEMORY_PRIVATE nodes opted in via NODE_PRIVATE_CAP_TIERING.
+ */
+static void get_tierable_nodes(nodemask_t *nodes)
+{
+	int node;
+
+	*nodes = node_states[N_MEMORY];
+	for_each_node_state(node, N_MEMORY_PRIVATE)
+		if (node_allows_tiering(node))
+			node_set(node, *nodes);
+}
+
 /**
  * next_demotion_node() - Get the next node in the demotion path
  * @node: The starting node to lookup the next node
@@ -330,7 +345,7 @@ void node_get_allowed_targets(pg_data_t *pgdat, nodemask_t *targets)
 int next_demotion_node(int node, const nodemask_t *allowed_mask)
 {
 	struct demotion_nodes *nd;
-	nodemask_t mask;
+	nodemask_t mask, tierable;
 
 	if (!node_demotion)
 		return NUMA_NO_NODE;
@@ -370,15 +385,18 @@ int next_demotion_node(int node, const nodemask_t *allowed_mask)
 	 * closest demotion target.
 	 */
 	nodes_complement(mask, *allowed_mask);
-	return find_next_best_node_in(node, &mask, &node_states[N_MEMORY]);
+	get_tierable_nodes(&tierable);
+	return find_next_best_node_in(node, &mask, &tierable);
 }
 
 static void disable_all_demotion_targets(void)
 {
 	struct memory_tier *memtier;
+	nodemask_t tierable;
 	int node;
 
-	for_each_node_state(node, N_MEMORY) {
+	get_tierable_nodes(&tierable);
+	for_each_node_mask(node, tierable) {
 		node_demotion[node].preferred = NODE_MASK_NONE;
 		/*
 		 * We are holding memory_tier_lock, it is safe
@@ -399,9 +417,11 @@ static void disable_all_demotion_targets(void)
 
 static void dump_demotion_targets(void)
 {
+	nodemask_t tierable;
 	int node;
 
-	for_each_node_state(node, N_MEMORY) {
+	get_tierable_nodes(&tierable);
+	for_each_node_mask(node, tierable) {
 		struct memory_tier *memtier = __node_get_memory_tier(node);
 		nodemask_t preferred = node_demotion[node].preferred;
 
@@ -428,7 +448,7 @@ static void establish_demotion_targets(void)
 	struct demotion_nodes *nd;
 	int target = NUMA_NO_NODE, node;
 	int distance, best_distance;
-	nodemask_t tier_nodes, lower_tier;
+	nodemask_t tier_nodes, lower_tier, tierable;
 
 	lockdep_assert_held_once(&memory_tier_lock);
 
@@ -437,7 +457,8 @@ static void establish_demotion_targets(void)
 
 	disable_all_demotion_targets();
 
-	for_each_node_state(node, N_MEMORY) {
+	get_tierable_nodes(&tierable);
+	for_each_node_mask(node, tierable) {
 		best_distance = -1;
 		nd = &node_demotion[node];
 
@@ -455,7 +476,7 @@ static void establish_demotion_targets(void)
 		 * nodelist to skip list so that we find the best node from the
 		 * memtier nodelist.
 		 */
-		nodes_andnot(tier_nodes, node_states[N_MEMORY], tier_nodes);
+		nodes_andnot(tier_nodes, tierable, tier_nodes);
 
 		/*
 		 * Find all the nodes in the memory tier node list of same best distance.
@@ -464,7 +485,7 @@ static void establish_demotion_targets(void)
 		 */
 		do {
 			target = find_next_best_node_in(node, &tier_nodes,
-							&node_states[N_MEMORY]);
+							&tierable);
 			if (target == NUMA_NO_NODE)
 				break;
 
@@ -503,7 +524,7 @@ static void establish_demotion_targets(void)
 	 * allocation to a set of nodes that is closer the above selected
 	 * preferred node.
 	 */
-	lower_tier = node_states[N_MEMORY];
+	lower_tier = tierable;
 	list_for_each_entry(memtier, &memory_tiers, list) {
 		/*
 		 * Keep removing current tier from lower_tier nodes,
@@ -550,7 +571,11 @@ static struct memory_tier *set_node_memory_tier(int node)
 
 	lockdep_assert_held_once(&memory_tier_lock);
 
-	if (!node_state(node, N_MEMORY))
+	/*
+	 * Ordinary nodes join via N_MEMORY. N_MEMORY_PRIVATE nodes
+	 * joins only if its driver opted in as a demotion target.
+	 */
+	if (!node_state(node, N_MEMORY) && !node_allows_tiering(node))
 		return ERR_PTR(-EINVAL);
 
 	mt_calc_adistance(node, &adist);

@@ -15,6 +15,7 @@ struct page;
 #define NODE_PRIVATE_CAP_RECLAIM	(1UL << 0)	/* allow mm reclaim */
 #define NODE_PRIVATE_CAP_MEMPOLICY		(1UL << 1)	/* allow userspace mbind()/set_mempolicy() */
 #define NODE_PRIVATE_CAP_HOTUNPLUG	(1UL << 2)	/* allow hot-unplug via migration */
+#define NODE_PRIVATE_CAP_TIERING	(1UL << 3)	/* allow kernel tiering migration (demotion/NUMA balancing/DAMON) */
 
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
@@ -107,6 +108,28 @@ static inline bool node_allows_hotunplug(int nid)
 	return ret;
 }
 
+/**
+ * node_allows_tiering - may kernel tiering migrate to/scan this node?
+ * @nid: the node to test
+ *
+ * Governs the kernel's access-aware migration subsystems on a private node:
+ * demotion (as a target), NUMA balancing, and DAMON migration.
+ * True for normal nodes and private nodes opted into CAP_TIERING.
+ */
+static inline bool node_allows_tiering(int nid)
+{
+	struct node_private *np;
+	bool ret;
+
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return true;
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->node_private);
+	ret = np && (np->caps & NODE_PRIVATE_CAP_TIERING);
+	rcu_read_unlock();
+	return ret;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -130,6 +153,11 @@ static inline bool node_allows_mempolicy(int nid)
 }
 
 static inline bool node_allows_hotunplug(int nid)
+{
+	return true;
+}
+
+static inline bool node_allows_tiering(int nid)
 {
 	return true;
 }

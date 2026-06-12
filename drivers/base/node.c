@@ -896,6 +896,14 @@ int node_private_register(int nid, struct node_private *np)
 	if (!np || !node_possible(nid))
 		return -EINVAL;
 
+	/*
+	 * A tiering node accumulates migrated/demoted pages, so it needs reclaim
+	 * as a safety valve or it just fills up: CAP_TIERING requires CAP_RECLAIM.
+	 */
+	if ((np->caps & NODE_PRIVATE_CAP_TIERING) &&
+	    !(np->caps & NODE_PRIVATE_CAP_RECLAIM))
+		return -EINVAL;
+
 	mutex_lock(&node_private_lock);
 	mem_hotplug_begin();
 

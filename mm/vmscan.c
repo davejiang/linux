@@ -973,6 +973,14 @@ static struct folio *alloc_demote_folio(struct folio *src,
 	mtc = (struct migration_target_control *)private;
 
 	/*
+	 * If a private node is included in the nodemask, select the private
+	 * fallback so the allocation can reach it.
+	 */
+	if (mtc->nmask &&
+	    nodes_intersects(*mtc->nmask, node_states[N_MEMORY_PRIVATE]))
+		mtc->zlsel = ALLOC_ZONELIST_PRIVATE;
+
+	/*
 	 * make sure we allocate from the target node first also trying to
 	 * demote or reclaim pages from the target node via kswapd if we are
 	 * low on free memory on target node. If we don't do this and if

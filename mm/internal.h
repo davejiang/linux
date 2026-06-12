@@ -69,6 +69,19 @@ static inline bool page_allows_collapse(struct page *page)
 }
 
 /*
+ * folio_allows_numa_balance() - may NUMA balancing scan/migrate this folio?
+ *
+ * NUMA balancing is access-aware tiering migration, so it follows the tiering
+ * opt-in: false for ZONE_DEVICE and for N_MEMORY_PRIVATE nodes without
+ * CAP_TIERING, true for all other folios.
+ */
+static inline bool folio_allows_numa_balance(struct folio *folio)
+{
+	return !folio_is_zone_device(folio) &&
+	       node_allows_tiering(folio_nid(folio));
+}
+
+/*
  * folio_allows_longterm_pin() - may this folio be long-term GUP-pinned?
  *
  * checks folio_is_longterm_pinnable() rules plus private node permissions.
@@ -1592,6 +1605,7 @@ struct migration_target_control {
 	nodemask_t *nmask;
 	gfp_t gfp_mask;
 	enum migrate_reason reason;
+	enum alloc_zonelist zlsel;
 };
 
 /*
