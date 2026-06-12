@@ -385,10 +385,13 @@ ANON_DAX_CAP_ATTR(reclaim, NODE_PRIVATE_CAP_RECLAIM);
 
 ANON_DAX_CAP_ATTR(mempolicy, NODE_PRIVATE_CAP_MEMPOLICY);
 
+ANON_DAX_CAP_ATTR(hotunplug, NODE_PRIVATE_CAP_HOTUNPLUG);
+
 static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_hotplug.attr,
 	&dev_attr_reclaim.attr,
 	&dev_attr_mempolicy.attr,
+	&dev_attr_hotunplug.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(anon_dax);
