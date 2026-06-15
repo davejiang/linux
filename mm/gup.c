@@ -547,10 +547,11 @@ static struct folio *try_grab_folio_fast(struct page *page, int refs,
 	/*
 	 * Can't do FOLL_LONGTERM + FOLL_PIN gup fast path if not in a
 	 * right zone, so fail and let the caller fall back to the slow
-	 * path.
+	 * path.  folio_allows_longterm_pin() also fails a private-node folio
+	 * here so the slow path can reject the pin.
 	 */
 	if (unlikely((flags & FOLL_LONGTERM) &&
-		     !folio_is_longterm_pinnable(folio))) {
+		     !folio_allows_longterm_pin(folio))) {
 		folio_put_refs(folio, refs);
 		return NULL;
 	}
@@ -2382,11 +2383,40 @@ err:
 	return ret;
 }
 
+/*
+ * True if any folio sits on a private node whose folios may not be longterm
+ * pinned.  Such a folio can be neither pinned nor migrated, so the whole pin
+ * must fail with the folios left in place.  Checked before any isolation so the
+ * rejection path never migrates.
+ */
+static bool pofs_has_ltpin_forbidden(struct pages_or_folios *pofs)
+{
+	struct folio *folio;
+	long i = 0;
+
+	for (folio = pofs_get_folio(pofs, i); folio;
+	     folio = pofs_next_folio(folio, pofs, &i)) {
+		if (folio_longterm_pin_forbidden(folio))
+			return true;
+	}
+	return false;
+}
+
 static long
 check_and_migrate_movable_pages_or_folios(struct pages_or_folios *pofs)
 {
 	LIST_HEAD(movable_folio_list);
 	unsigned long collected;
+
+	/*
+	 * A folio on a private node that forbids longterm pinning must fail the
+	 * pin outright - it is neither pinnable in place nor migratable off the
+	 * node.  Reject before collecting/isolating so nothing is migrated.
+	 */
+	if (pofs_has_ltpin_forbidden(pofs)) {
+		pofs_unpin(pofs);
+		return -EFAULT;
+	}
 
 	collected = collect_longterm_unpinnable_folios(&movable_folio_list,
 						       pofs);
