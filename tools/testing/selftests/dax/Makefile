@@ -7,6 +7,7 @@ TEST_GEN_FILES := private_node_tool
 
 TEST_PROGS := dax-kmem-hotplug.sh \
 	      private_node_hotplug.sh \
-	      private_node_isolation.sh
+	      private_node_isolation.sh \
+	      private_node_ltpin.sh
 
 include ../lib.mk
