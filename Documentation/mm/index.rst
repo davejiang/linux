@@ -52,6 +52,7 @@ documentation, or deleted if it has served its purpose.
    mmu_notifier
    multigen_lru
    numa
+   numa_private_nodes
    overcommit-accounting
    page_migration
    page_frags
