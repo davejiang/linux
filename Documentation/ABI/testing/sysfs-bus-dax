@@ -159,7 +159,10 @@ Contact:	nvdimm@lists.linux.dev
 Description:
 		(RW) Controls the hotplug state of the memory region.
 		Applies to all memory blocks associated with the device.
-		Only applies to dax_kmem devices.
+		Applies to dax_kmem and anondax devices.  For anondax the
+		memory is onlined onto a private (N_MEMORY_PRIVATE) node and
+		the per-service opt-ins below select which mm services may
+		touch it.
 
 		Reading returns the current state; the writable states mirror
 		the per-block /sys/devices/system/memory/memoryX/state ABI::
@@ -177,3 +180,46 @@ Description:
 		A device can only be onlined from the "unplugged" state, so a
 		device must be returned to "unplugged" before it can be onlined
 		into a different state.
+
+What:		/sys/bus/dax/devices/daxX.Y/reclaim
+What:		/sys/bus/dax/devices/daxX.Y/mempolicy
+What:		/sys/bus/dax/devices/daxX.Y/hotunplug
+What:		/sys/bus/dax/devices/daxX.Y/tiering
+What:		/sys/bus/dax/devices/daxX.Y/ltpin
+What:		/sys/bus/dax/devices/daxX.Y/user_migrate
+Date:		January, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) anondax only.  Per-service opt-ins (booleans) recorded on
+		the device and applied to its private node at hotplug, selecting
+		which mm services may act on the node's memory.  A private node
+		opts out of everything by default; each toggle relaxes one
+		service:
+
+		  reclaim		allow reclaim of the node's folios, by the mm
+					and by userspace MADV_COLD/PAGEOUT/FREE
+		  mempolicy		allow userspace placement policy
+					(mbind()/set_mempolicy()/home_node) onto the node
+		  hotunplug		allow hot-unplug via migration
+		  tiering		allow kernel access-aware migration: demotion
+					target, NUMA balancing, and DAMON migration
+		  ltpin			allow FOLL_LONGTERM GUP pins
+		  user_migrate		allow userspace move_pages() to/from the node
+
+		Writable only while the device is "unplugged" (-EBUSY otherwise).
+		Dependencies between opt-ins (tiering requires reclaim) are
+		validated when the device is hotplugged, not
+		at write time: an inconsistent combination is accepted by the
+		write but the subsequent hotplug then fails.
+		See Documentation/mm/numa_private_nodes.rst.
+
+What:		/sys/bus/dax/devices/daxX.Y/adistance
+Date:		January, 2026
+KernelVersion:	v6.21
+Contact:	nvdimm@lists.linux.dev
+Description:
+		(RW) anondax only.  Abstract distance used to place the node in
+		the memory-tier hierarchy when it is opted in as a
+		demotion (larger is a lower tier).  Writable only while
+		the device is "unplugged".
