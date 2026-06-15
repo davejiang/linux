@@ -29,6 +29,17 @@ Description:
 		Nodes that have regular or high memory.
 		Depends on CONFIG_HIGHMEM.
 
+What:		/sys/devices/system/node/has_private_memory
+Date:		January 2026
+Contact:	Linux Memory Management list <linux-mm@kvack.org>
+Description:
+		Nodes that have private (N_MEMORY_PRIVATE) memory: memory
+		hotplugged by a driver onto a CPU-less node and isolated from
+		the page allocator's normal and fallback zonelists.  A node is
+		listed here for as long as it holds private memory; it is never
+		listed in has_memory at the same time (the two states are
+		mutually exclusive).  See Documentation/mm/numa_private_nodes.rst.
+
 What:		/sys/devices/system/node/nodeX
 Date:		October 2002
 Contact:	Linux Memory Management list <linux-mm@kvack.org>
