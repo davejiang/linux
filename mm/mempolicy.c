@@ -498,7 +498,7 @@ void __mpol_put(struct mempolicy *pol)
 	 */
 	kfree_rcu(pol, rcu);
 }
-EXPORT_SYMBOL_FOR_MODULES(__mpol_put, "kvm");
+EXPORT_SYMBOL_FOR_MODULES(__mpol_put, "kvm,anondax");
 
 static void mpol_rebind_default(struct mempolicy *pol, const nodemask_t *nodes)
 {
@@ -1108,6 +1108,55 @@ out:
 	NODEMASK_SCRATCH_FREE(scratch);
 	return ret;
 }
+
+/**
+ * mpol_private_bind - build an MPOL_BIND policy pinned to a private node
+ * @nid: an N_MEMORY_PRIVATE node
+ *
+ * Returns a refcounted mempolicy that binds allocations to @nid with the
+ * private-placement intent (MPOL_F_PRIVATE), so faults prefer @nid through
+ * ZONELIST_PRIVATE.  Like any MPOL_BIND it is relaxable: an unsatisfiable
+ * request (e.g. a cpuset that excludes @nid) falls back rather than failing.
+ *
+ * A driver exposes this via vm_ops->get_policy so its mappings - and their
+ * swap-ins - land on the node without requiring userspace mbind().
+ *
+ * Must be called while @nid is N_MEMORY_PRIVATE (e.g. after hotplug) and from
+ * a context whose cpuset allows it, so the bound nodemask retains @nid.
+ *
+ * The caller owns the reference and frees it with mpol_put().
+ *
+ * Return: the policy, or an ERR_PTR on failure.
+ */
+struct mempolicy *mpol_private_bind(int nid)
+{
+	unsigned short flags = MPOL_F_PRIVATE;
+	struct mempolicy *pol;
+	nodemask_t nodes;
+	int err;
+	NODEMASK_SCRATCH(scratch);
+
+	if (!scratch)
+		return ERR_PTR(-ENOMEM);
+
+	nodes_clear(nodes);
+	node_set(nid, nodes);
+
+	pol = mpol_new(MPOL_BIND, flags, &nodes);
+	if (IS_ERR(pol)) {
+		NODEMASK_SCRATCH_FREE(scratch);
+		return pol;
+	}
+
+	err = mpol_set_nodemask(pol, &nodes, scratch);
+	NODEMASK_SCRATCH_FREE(scratch);
+	if (err) {
+		mpol_put(pol);
+		return ERR_PTR(err);
+	}
+	return pol;
+}
+EXPORT_SYMBOL_FOR_MODULES(mpol_private_bind, "anondax");
 
 /*
  * Return nodemask for policy for get_mempolicy() query
