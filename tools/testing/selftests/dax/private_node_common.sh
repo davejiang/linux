@@ -20,16 +20,19 @@ pn_require_root() {
 	[ "$(id -u)" = 0 ] || { ktap_skip_all "must be run as root"; exit "$KSFT_SKIP"; }
 }
 
-# node_in_mask NID MASKFILE -- true if NID is set in $NODE_BASE/MASKFILE
-# (parses a nodelist like "0,2-3").
-node_in_mask() {
-	local nid=$1 f=$NODE_BASE/$2 tok lo hi
-	[ -r "$f" ] || return 1
-	for tok in $(tr ',' ' ' < "$f"); do
+# nodelist_has LIST NID -- true if NID is set in a nodelist string like "0,2-3".
+nodelist_has() {
+	local nid=$2 tok lo hi
+	for tok in $(echo "$1" | tr ',' ' '); do
 		lo=${tok%-*}; hi=${tok#*-}
 		[ "$nid" -ge "$lo" ] 2>/dev/null && [ "$nid" -le "$hi" ] 2>/dev/null && return 0
 	done
 	return 1
+}
+
+# node_in_mask NID MASKFILE -- true if NID is set in $NODE_BASE/MASKFILE.
+node_in_mask() {
+	[ -r "$NODE_BASE/$2" ] && nodelist_has "$(cat "$NODE_BASE/$2")" "$1"
 }
 
 pn__find_bound() {	# echo a dax device already bound to anondax, if any
@@ -104,4 +107,68 @@ pn_reset() {
 	for c in ltpin tiering hotunplug mempolicy reclaim; do
 		[ -e "$D/$c" ] && echo 0 > "$D/$c" 2>/dev/null
 	done
+}
+
+# pn_provision_all -- bind EVERY device_dax device on a memoryless node to
+# anondax (for the multi-private-node tests).  On success sets PN_DAXES and
+# PN_NODES (space-separated, index-aligned).  Returns 0 always; the caller
+# checks how many nodes were found and SKIPs if too few.
+pn_provision_all() {
+	modprobe -q nd_e820 dax_pmem device_dax nd_pmem 2>/dev/null
+	modprobe -q anondax 2>/dev/null
+	if command -v ndctl >/dev/null 2>&1; then
+		local r
+		for r in $(ndctl list -R 2>/dev/null | grep -oE 'region[0-9]+'); do
+			ndctl create-namespace -m devdax -e "${r/region/namespace}.0" -f \
+				>/dev/null 2>&1
+		done
+	fi
+	local d nid drv
+	PN_DAXES=; PN_NODES=
+	for d in "$DAX_BASE"/dax*; do
+		[ -e "$d/target_node" ] || continue
+		nid=$(cat "$d/target_node"); [ "$nid" -ge 0 ] 2>/dev/null || continue
+		node_in_mask "$nid" has_memory && continue	# memoryless only
+		drv=$(basename "$(readlink "$d/driver" 2>/dev/null)" 2>/dev/null)
+		[ "$drv" = device_dax ] &&
+			echo "$(basename "$d")" > /sys/bus/dax/drivers/device_dax/unbind 2>/dev/null
+		[ "$drv" = anondax ] ||
+			echo "$(basename "$d")" > /sys/bus/dax/drivers/anondax/new_id 2>/dev/null
+		PN_DAXES="$PN_DAXES $(basename "$d")"; PN_NODES="$PN_NODES $nid"
+	done
+	PN_DAXES=${PN_DAXES# }; PN_NODES=${PN_NODES# }
+	sleep 1
+}
+
+# pn_swap_setup -- ensure at least one swap area is active.  Reuses an existing
+# one, else swaps on the first unmounted block device (e.g. a vng --disk).
+# Returns 0 on success; caller SKIPs on failure.  NEVER touches a mounted device.
+pn_swap_setup() {
+	[ "$(grep -c . /proc/swaps)" -gt 1 ] && return 0
+	local d
+	for d in /dev/vd? /dev/sd? /dev/nvme?n?; do
+		[ -b "$d" ] || continue
+		grep -q "^$d " /proc/mounts && continue		# in use as a fs
+		swapon "$d" 2>/dev/null && return 0
+		mkswap "$d" >/dev/null 2>&1 && swapon "$d" 2>/dev/null && return 0
+	done
+	return 1
+}
+
+# pn_cgroup2 -- echo a cgroup2 mount root with cpuset delegated to subtree
+# control, or return 1 if cgroup2/cpuset is unavailable.
+pn_cgroup2() {
+	local root
+	root=$(awk '$3=="cgroup2"{print $2; exit}' /proc/mounts)
+	if [ -z "$root" ]; then
+		root=/sys/fs/cgroup
+		mkdir -p "$root" 2>/dev/null
+		mount -t cgroup2 none "$root" 2>/dev/null
+		root=$(awk '$3=="cgroup2"{print $2; exit}' /proc/mounts)
+	fi
+	[ -n "$root" ] || return 1
+	grep -qw cpuset "$root/cgroup.controllers" 2>/dev/null || return 1
+	grep -qw cpuset "$root/cgroup.subtree_control" 2>/dev/null ||
+		echo "+cpuset" > "$root/cgroup.subtree_control" 2>/dev/null
+	echo "$root"
 }
