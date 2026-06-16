@@ -223,7 +223,9 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 static inline struct zonelist *
 select_zonelist(int nid, gfp_t flags, enum alloc_zonelist zlsel)
 {
-	return node_zonelist(nid, flags);
+	if (likely(zlsel == ALLOC_ZONELIST_DEFAULT))
+		return node_zonelist(nid, flags);
+	return &NODE_DATA(nid)->node_zonelists[ZONELIST_PRIVATE];
 }
 
 #ifndef HAVE_ARCH_FREE_PAGE

@@ -3816,6 +3816,11 @@ retry:
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
+		/* Re-impose __GFP_THISNODE to non-default zonelists */
+		if (unlikely(ac->zlsel != ALLOC_ZONELIST_DEFAULT &&
+			     (gfp_mask & __GFP_THISNODE)) &&
+		    zone_to_nid(zone) != zonelist_node_idx(ac->preferred_zoneref))
+			continue;
 		/*
 		 * When allocating a page cache page for writing, we
 		 * want to get it from a node that is within its dirty
@@ -5782,10 +5787,11 @@ static void build_zonelists_in_node_order(pg_data_t *pgdat, int *node_order,
 static void build_thisnode_zonelists(pg_data_t *pgdat)
 {
 	struct zoneref *zonerefs;
-	int nr_zones;
+	int nr_zones = 0;
 
 	zonerefs = pgdat->node_zonelists[ZONELIST_NOFALLBACK]._zonerefs;
-	nr_zones = build_zonerefs_node(pgdat, zonerefs);
+	if (!node_state(pgdat->node_id, N_MEMORY_PRIVATE))
+		nr_zones = build_zonerefs_node(pgdat, zonerefs);
 	zonerefs += nr_zones;
 	zonerefs->zone = NULL;
 	zonerefs->zone_idx = 0;
@@ -5827,11 +5833,24 @@ static void build_node_zonelist(pg_data_t *pgdat, const nodemask_t *candidates,
 static void build_zonelists(pg_data_t *pgdat)
 {
 	static int node_order[MAX_NUMNODES];
+	nodemask_t tier_nodes;
 	int local_node = pgdat->node_id;
 	int node, nr_nodes = 0;
 
 	memset(node_order, 0, sizeof(node_order));
 
+	/*
+	 * Three lists per node:
+	 *  - FALLBACK:   ordered over N_MEMORY only.  A private node is absent
+	 *                from N_MEMORY, so its FALLBACK list holds the *other*
+	 *                (real) nodes - a stray default allocation preferring a
+	 *                private node still falls back to real memory.
+	 *  - NOFALLBACK: this node's own zones (__GFP_THISNODE).  Left empty for
+	 *                a private node so __GFP_THISNODE cannot reach it.
+	 *  - PRIVATE:    ordered over N_MEMORY | N_MEMORY_PRIVATE - the only list
+	 *                that contains private zones, reached solely via
+	 *                ALLOC_ZONELIST_PRIVATE.
+	 */
 	build_node_zonelist(pgdat, &node_states[N_MEMORY], ZONELIST_FALLBACK,
 			    true, node_order, &nr_nodes);
 	build_thisnode_zonelists(pgdat);
@@ -5840,6 +5859,10 @@ static void build_zonelists(pg_data_t *pgdat)
 	for (node = 0; node < nr_nodes; node++)
 		pr_cont("%d ", node_order[node]);
 	pr_cont("\n");
+
+	nodes_or(tier_nodes, node_states[N_MEMORY], node_states[N_MEMORY_PRIVATE]);
+	build_node_zonelist(pgdat, &tier_nodes, ZONELIST_PRIVATE, false,
+			    node_order, &nr_nodes);
 }
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES
@@ -7190,6 +7213,14 @@ int alloc_contig_frozen_range_noprof(unsigned long start, unsigned long end,
 		return -EINVAL;
 
 	/*
+	 * Private nodes are isolated via the zonelists, but alloc_contig
+	 * works directly on a target zone rather than a zonelist, so guard
+	 * it explicitly: it never allocates onto a private node.
+	 */
+	if (unlikely(node_state(zone_to_nid(cc.zone), N_MEMORY_PRIVATE)))
+		return -EBUSY;
+
+	/*
 	 * What we do here is we mark all pageblocks in range as
 	 * MIGRATE_ISOLATE.  Because pageblock and max order pages may
 	 * have different sizes, and due to the way page allocator
@@ -7426,6 +7457,14 @@ retry:
 	zonelist = node_zonelist(nid, gfp_mask);
 	for_each_zone_zonelist_nodemask(zone, z, zonelist,
 					gfp_zone(gfp_mask), nodemask) {
+		/*
+		 * The FALLBACK zonelist already excludes private nodes; guard
+		 * explicitly too, since the contiguous allocator must never
+		 * carve a range out of a private node.
+		 */
+		if (unlikely(node_state(zone_to_nid(zone), N_MEMORY_PRIVATE)))
+			continue;
+
 		spin_lock_irqsave(&zone->lock, flags);
 
 		pfn = ALIGN(zone->zone_start_pfn, nr_pages);
