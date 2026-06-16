@@ -1395,6 +1395,11 @@ enum {
 	MAX_ZONELISTS
 };
 
+/* Which zonelist an allocation should use, resolved by select_zonelist() */
+enum alloc_zonelist {
+	ALLOC_ZONELIST_DEFAULT = 0,	/* __GFP_THISNODE based selection */
+};
+
 /*
  * This struct contains information about a zone in a zonelist. It is stored
  * here to avoid dereferences into large structures and lookups of tables

@@ -671,6 +671,7 @@ struct alloc_context {
 	const nodemask_t *nodemask;
 	struct zoneref *preferred_zoneref;
 	int migratetype;
+	enum alloc_zonelist zlsel;
 
 	/*
 	 * highest_zoneidx represents highest usable zone index of
@@ -914,6 +915,8 @@ extern int user_min_free_kbytes;
 
 struct page *__alloc_frozen_pages_noprof(gfp_t, unsigned int order, int nid,
 		nodemask_t *);
+struct page *__alloc_frozen_pages_zonelist_noprof(gfp_t, unsigned int order, int nid,
+		nodemask_t *, enum alloc_zonelist zlsel);
 #define __alloc_frozen_pages(...) \
 	alloc_hooks(__alloc_frozen_pages_noprof(__VA_ARGS__))
 void free_frozen_pages(struct page *page, unsigned int order);

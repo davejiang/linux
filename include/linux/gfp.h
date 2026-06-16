@@ -219,6 +219,13 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 	return NODE_DATA(nid)->node_zonelists + gfp_zonelist(flags);
 }
 
+/* Resolve an allocation's zonelist. Defaults to gfp-based selection. */
+static inline struct zonelist *
+select_zonelist(int nid, gfp_t flags, enum alloc_zonelist zlsel)
+{
+	return node_zonelist(nid, flags);
+}
+
 #ifndef HAVE_ARCH_FREE_PAGE
 static inline void arch_free_page(struct page *page, int order) { }
 #endif
@@ -233,6 +240,11 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order, int preferred_n
 struct folio *__folio_alloc_noprof(gfp_t gfp, unsigned int order, int preferred_nid,
 		nodemask_t *nodemask);
 #define __folio_alloc(...)			alloc_hooks(__folio_alloc_noprof(__VA_ARGS__))
+
+struct folio *__folio_alloc_zonelist_noprof(gfp_t gfp, unsigned int order,
+		int preferred_nid, nodemask_t *nodemask,
+		enum alloc_zonelist zlsel);
+#define __folio_alloc_zonelist(...)		alloc_hooks(__folio_alloc_zonelist_noprof(__VA_ARGS__))
 
 unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
 				nodemask_t *nodemask, int nr_pages,
