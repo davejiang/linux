@@ -17,6 +17,7 @@ struct page;
 #define NODE_PRIVATE_CAP_HOTUNPLUG	(1UL << 2)	/* allow hot-unplug via migration */
 #define NODE_PRIVATE_CAP_TIERING	(1UL << 3)	/* allow kernel tiering migration (demotion/NUMA balancing/DAMON) */
 #define NODE_PRIVATE_CAP_LTPIN		(1UL << 4)	/* allow longterm GUP pin */
+#define NODE_PRIVATE_CAP_USER_MIGRATE	(1UL << 5)	/* allow userspace move_pages() to/from the node */
 
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
@@ -154,6 +155,32 @@ static inline bool node_allows_ltpin(int nid)
 	return ret;
 }
 
+/**
+ * node_allows_user_migrate - may userspace move_pages() to/from this node?
+ * @nid: the node to test
+ *
+ * Gates explicit userland migration (move_pages()) in both directions.  A
+ * complete placement-target predicate: true for an N_MEMORY node or a private
+ * node opted into CAP_USER_MIGRATE; false for an offline/memoryless node or a
+ * non-opted private node.  The N_MEMORY early-out also keeps the NODE_DATA deref
+ * to online private nodes, whose node_private pointer is valid.
+ */
+static inline bool node_allows_user_migrate(int nid)
+{
+	struct node_private *np;
+	bool ret;
+
+	if (node_state(nid, N_MEMORY))
+		return true;
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return false;
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->node_private);
+	ret = np && (np->caps & NODE_PRIVATE_CAP_USER_MIGRATE);
+	rcu_read_unlock();
+	return ret;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -187,6 +214,11 @@ static inline bool node_allows_tiering(int nid)
 }
 
 static inline bool node_allows_ltpin(int nid)
+{
+	return true;
+}
+
+static inline bool node_allows_user_migrate(int nid)
 {
 	return true;
 }

@@ -2244,6 +2244,22 @@ static int do_move_pages_to_node(struct list_head *pagelist, int node)
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
 	};
+	nodemask_t nmask;
+
+	/*
+	 * A private-node target is reachable only through ZONELIST_PRIVATE, never
+	 * the NOFALLBACK (__GFP_THISNODE) list which excludes private zones.  Drop
+	 * __GFP_THISNODE, select the private fallback list, and confine the
+	 * allocation to @node with a nodemask so it lands there instead of
+	 * spilling onto DRAM.
+	 */
+	if (node_state(node, N_MEMORY_PRIVATE)) {
+		mtc.gfp_mask &= ~__GFP_THISNODE;
+		mtc.zlsel = ALLOC_ZONELIST_PRIVATE;
+		nodes_clear(nmask);
+		node_set(node, nmask);
+		mtc.nmask = &nmask;
+	}
 
 	err = migrate_pages(pagelist, alloc_migration_target, NULL,
 		(unsigned long)&mtc, MIGRATE_SYNC, MR_SYSCALL, NULL);
@@ -2258,7 +2274,12 @@ static int __add_folio_for_migration(struct folio *folio, int node,
 	if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 		return -EFAULT;
 
-	if (folio_is_private_managed(folio))
+	/*
+	 * ZONE_DEVICE is never userland-migratable; a private-node folio is only
+	 * if its node is opted into userspace migration (CAP_USER_MIGRATE).
+	 */
+	if (folio_is_zone_device(folio) ||
+	    (folio_is_private_node(folio) && !node_allows_user_migrate(folio_nid(folio))))
 		return -ENOENT;
 
 	if (folio_nid(folio) == node)
@@ -2382,7 +2403,12 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 		err = -ENODEV;
 		if (node < 0 || node >= MAX_NUMNODES)
 			goto out_flush;
-		if (!node_state(node, N_MEMORY))
+		/*
+		 * Accept an N_MEMORY node, or a private node opted into userspace
+		 * migration (CAP_USER_MIGRATE); reject offline/memoryless or
+		 * non-opted private targets.
+		 */
+		if (!node_allows_user_migrate(node))
 			goto out_flush;
 
 		err = -EACCES;
@@ -2467,7 +2493,9 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 		if (folio) {
 			if (is_zero_folio(folio) || is_huge_zero_folio(folio))
 				err = -EFAULT;
-			else if (folio_is_private_managed(folio))
+			else if (folio_is_zone_device(folio) ||
+				 (folio_is_private_node(folio) &&
+				  !node_allows_user_migrate(folio_nid(folio))))
 				err = -ENOENT;
 			else
 				err = folio_nid(folio);
