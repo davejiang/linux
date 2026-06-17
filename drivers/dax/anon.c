@@ -480,6 +480,8 @@ static DEVICE_ATTR_RW(adistance);
 
 ANON_DAX_CAP_ATTR(ltpin, NODE_PRIVATE_CAP_LTPIN);
 
+ANON_DAX_CAP_ATTR(user_migrate, NODE_PRIVATE_CAP_USER_MIGRATE);
+
 static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_hotplug.attr,
 	&dev_attr_reclaim.attr,
@@ -488,6 +490,7 @@ static struct attribute *anon_dax_attrs[] = {
 	&dev_attr_tiering.attr,
 	&dev_attr_adistance.attr,
 	&dev_attr_ltpin.attr,
+	&dev_attr_user_migrate.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(anon_dax);
