@@ -13,6 +13,7 @@ struct page;
  * to let specific services operate on its node.
  */
 #define NODE_PRIVATE_CAP_RECLAIM	(1UL << 0)	/* allow mm reclaim */
+#define NODE_PRIVATE_CAP_MEMPOLICY		(1UL << 1)	/* allow userspace mbind()/set_mempolicy() */
 
 /**
  * struct node_private - Per-node container for N_MEMORY_PRIVATE nodes
@@ -64,6 +65,27 @@ static inline bool node_allows_reclaim(int nid)
 	return ret;
 }
 
+/**
+ * node_allows_mempolicy - may userspace place memory here via mempolicy?
+ * @nid: the node to test
+ *
+ * Governs mbind()/set_mempolicy()/home_node placement onto a private node.
+ * True for normal nodes and private nodes opted into CAP_MEMPOLICY.
+ */
+static inline bool node_allows_mempolicy(int nid)
+{
+	struct node_private *np;
+	bool ret;
+
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return true;
+	rcu_read_lock();
+	np = rcu_dereference(NODE_DATA(nid)->node_private);
+	ret = np && (np->caps & NODE_PRIVATE_CAP_MEMPOLICY);
+	rcu_read_unlock();
+	return ret;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -77,6 +99,11 @@ static inline bool page_is_private_node(struct page *page)
 }
 
 static inline bool node_allows_reclaim(int nid)
+{
+	return true;
+}
+
+static inline bool node_allows_mempolicy(int nid)
 {
 	return true;
 }

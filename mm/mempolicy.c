@@ -418,15 +418,33 @@ static int mpol_set_nodemask(struct mempolicy *pol,
 	VM_BUG_ON(!nodes);
 
 	nodes_copy(nsc->mask1, node_states[N_MEMORY]);
-	/* bound N_MEMORY_PRIVATE nodes must be added back explicitly */
-	if (pol->flags & MPOL_F_PRIVATE)
-		nodes_or(nsc->mask1, nsc->mask1, *nodes);
+	/*
+	 * Private (N_MEMORY_PRIVATE) nodes are absent from N_MEMORY, so they are
+	 * trimmed from the request like any cpuset-disallowed node.  Add back a
+	 * requested private node the caller is allowed to place on: a pre-set
+	 * MPOL_F_PRIVATE (driver-stamped) bypasses the opt-in; a userspace
+	 * request requires the node to allow mempolicy placement (CAP_MEMPOLICY).
+	 * A non-opted private node stays trimmed (an all-private request thus
+	 * collapses to empty -> EINVAL), exactly like cpuset.
+	 */
+	if (nodes_intersects(*nodes, node_states[N_MEMORY_PRIVATE])) {
+		int nid;
+
+		for_each_node_mask(nid, *nodes)
+			if (node_state(nid, N_MEMORY_PRIVATE) &&
+			    ((pol->flags & MPOL_F_PRIVATE) || node_allows_mempolicy(nid)))
+				node_set(nid, nsc->mask1);
+	}
 	nodes_and(nsc->mask1, nsc->mask1, cpuset_current_mems_allowed);
 
 	if (pol->flags & MPOL_F_RELATIVE_NODES)
 		mpol_relative_nodemask(&nsc->mask2, nodes, &nsc->mask1);
 	else
 		nodes_and(nsc->mask2, *nodes, nsc->mask1);
+
+	/* A surviving private node marks the policy as a private bind. */
+	if (nodes_intersects(nsc->mask2, node_states[N_MEMORY_PRIVATE]))
+		pol->flags |= MPOL_F_PRIVATE;
 
 	if (mpol_store_user_nodemask(pol))
 		pol->w.user_nodemask = *nodes;
