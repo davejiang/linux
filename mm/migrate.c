@@ -2243,23 +2243,13 @@ static int do_move_pages_to_node(struct list_head *pagelist, int node)
 		.nid = node,
 		.gfp_mask = GFP_HIGHUSER_MOVABLE | __GFP_THISNODE,
 		.reason = MR_SYSCALL,
+		/*
+		 * Reach a CAP_USER_MIGRATE private node via ZONELIST_PRIVATE;
+		 * __GFP_THISNODE still confines the walk to @node (re-imposed
+		 * for non-default zonelists in get_page_from_freelist()).
+		 */
+		.zlsel = alloc_zonelist_for_node(node, NODE_ALLOC_USER_MIGRATE),
 	};
-	nodemask_t nmask;
-
-	/*
-	 * A private-node target is reachable only through ZONELIST_PRIVATE, never
-	 * the NOFALLBACK (__GFP_THISNODE) list which excludes private zones.  Drop
-	 * __GFP_THISNODE, select the private fallback list, and confine the
-	 * allocation to @node with a nodemask so it lands there instead of
-	 * spilling onto DRAM.
-	 */
-	if (node_state(node, N_MEMORY_PRIVATE)) {
-		mtc.gfp_mask &= ~__GFP_THISNODE;
-		mtc.zlsel = ALLOC_ZONELIST_PRIVATE;
-		nodes_clear(nmask);
-		node_set(node, nmask);
-		mtc.nmask = &nmask;
-	}
 
 	err = migrate_pages(pagelist, alloc_migration_target, NULL,
 		(unsigned long)&mtc, MIGRATE_SYNC, MR_SYSCALL, NULL);

@@ -35,6 +35,18 @@ struct node_private {
 	unsigned long caps;
 };
 
+/*
+ * Which mm operation wants to reach a target node, and thus which per-node
+ * capability authorises reaching a private (N_MEMORY_PRIVATE) node for it.
+ * Used by alloc_zonelist_for_node() so the private zonelist cannot be selected
+ * without naming the operation whose capability allows it.
+ */
+enum node_alloc_reason {
+	NODE_ALLOC_RECLAIM,		/* reclaim / compaction / khugepaged collapse */
+	NODE_ALLOC_TIERING,		/* demotion / kernel tiering migration */
+	NODE_ALLOC_USER_MIGRATE,	/* move_pages() */
+};
+
 #ifdef CONFIG_NUMA
 #include <linux/mmzone.h>
 
@@ -181,6 +193,61 @@ static inline bool node_allows_user_migrate(int nid)
 	return ret;
 }
 
+/**
+ * alloc_zonelist_for_node - the zonelist a targeted allocation uses to reach @nid
+ * @nid: the intended target node
+ * @reason: the mm operation requesting the allocation
+ *
+ * Returns ALLOC_ZONELIST_PRIVATE only for a private (N_MEMORY_PRIVATE) node that
+ * opted into the capability @reason needs; otherwise ALLOC_ZONELIST_DEFAULT,
+ * whose zonelist excludes private zones.  This is the single cap-enforcing point
+ * for targeted allocators (collapse, demotion, move_pages): the private zonelist
+ * cannot be selected without naming the operation whose capability authorises
+ * it, so no path can silently reach a private node it is not allowed to.  It
+ * does NOT replace a caller's own gate where that gate has distinct failure
+ * semantics (e.g. move_pages returning -ENODEV); it is the allocation backstop.
+ */
+static inline enum alloc_zonelist
+alloc_zonelist_for_node(int nid, enum node_alloc_reason reason)
+{
+	bool ok;
+
+	if (!node_state(nid, N_MEMORY_PRIVATE))
+		return ALLOC_ZONELIST_DEFAULT;
+	switch (reason) {
+	case NODE_ALLOC_RECLAIM:
+		ok = node_allows_reclaim(nid);
+		break;
+	case NODE_ALLOC_TIERING:
+		ok = node_allows_tiering(nid);
+		break;
+	case NODE_ALLOC_USER_MIGRATE:
+		ok = node_allows_user_migrate(nid);
+		break;
+	default:
+		ok = false;
+	}
+	return ok ? ALLOC_ZONELIST_PRIVATE : ALLOC_ZONELIST_DEFAULT;
+}
+
+/**
+ * alloc_zonelist_for_nodemask - as alloc_zonelist_for_node() but for a target
+ * nodemask (e.g. a migration-target set): ALLOC_ZONELIST_PRIVATE if any node in
+ * @nmask is a private node authorised for @reason.
+ */
+static inline enum alloc_zonelist
+alloc_zonelist_for_nodemask(const nodemask_t *nmask, enum node_alloc_reason reason)
+{
+	int nid;
+
+	if (!nmask)
+		return ALLOC_ZONELIST_DEFAULT;
+	for_each_node_mask(nid, *nmask)
+		if (alloc_zonelist_for_node(nid, reason) == ALLOC_ZONELIST_PRIVATE)
+			return ALLOC_ZONELIST_PRIVATE;
+	return ALLOC_ZONELIST_DEFAULT;
+}
+
 #else /* !CONFIG_NUMA */
 
 static inline bool folio_is_private_node(struct folio *folio)
@@ -221,6 +288,18 @@ static inline bool node_allows_ltpin(int nid)
 static inline bool node_allows_user_migrate(int nid)
 {
 	return true;
+}
+
+static inline enum alloc_zonelist
+alloc_zonelist_for_node(int nid, enum node_alloc_reason reason)
+{
+	return ALLOC_ZONELIST_DEFAULT;
+}
+
+static inline enum alloc_zonelist
+alloc_zonelist_for_nodemask(const nodemask_t *nmask, enum node_alloc_reason reason)
+{
+	return ALLOC_ZONELIST_DEFAULT;
 }
 
 #endif /* CONFIG_NUMA */

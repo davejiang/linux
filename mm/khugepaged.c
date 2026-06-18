@@ -1252,18 +1252,14 @@ static enum scan_result alloc_charge_folio(struct folio **foliop, struct mm_stru
 		     GFP_TRANSHUGE);
 	int node = collapse_find_target_node(cc);
 	/*
-	 * Resolve the zonelist from the target node.  Select ZONELIST_PRIVATE
-	 * only for a private (N_MEMORY_PRIVATE) node that opted into reclaim
-	 * (CAP_RECLAIM) - this is the isolation gate on the *allocation*, so it
-	 * covers every collapse path, including file/shmem collapse whose scan
-	 * does not run the per-page page_allows_collapse() check.  A private node
-	 * without the opt-in resolves to the default list (which excludes private
-	 * zones), so the collapse cannot land there; ordinary nodes use the
-	 * default list too.  cc->alloc_nmask already confines to the target.
+	 * Collapse is reclaim-domain make-room work, so reach a private target
+	 * only where it opted into CAP_RECLAIM.  Gating on the allocation covers
+	 * every collapse path, including file/shmem collapse whose scan does not
+	 * run the per-page page_allows_collapse() check; a non-opted private node
+	 * resolves to the default zonelist (which excludes private zones) and so
+	 * cannot be collapsed onto.  cc->alloc_nmask already confines to @node.
 	 */
-	enum alloc_zonelist zlsel = (node_state(node, N_MEMORY_PRIVATE) &&
-				     node_allows_reclaim(node)) ?
-		ALLOC_ZONELIST_PRIVATE : ALLOC_ZONELIST_DEFAULT;
+	enum alloc_zonelist zlsel = alloc_zonelist_for_node(node, NODE_ALLOC_RECLAIM);
 	struct folio *folio;
 
 	folio = __folio_alloc_zonelist(gfp, order, node, &cc->alloc_nmask, zlsel);

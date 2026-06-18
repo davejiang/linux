@@ -973,12 +973,11 @@ static struct folio *alloc_demote_folio(struct folio *src,
 	mtc = (struct migration_target_control *)private;
 
 	/*
-	 * If a private node is included in the nodemask, select the private
-	 * fallback so the allocation can reach it.
+	 * If the demotion target set includes a private node opted into kernel
+	 * tiering (CAP_TIERING), select the private list so the allocation can
+	 * reach it.
 	 */
-	if (mtc->nmask &&
-	    nodes_intersects(*mtc->nmask, node_states[N_MEMORY_PRIVATE]))
-		mtc->zlsel = ALLOC_ZONELIST_PRIVATE;
+	mtc->zlsel = alloc_zonelist_for_nodemask(mtc->nmask, NODE_ALLOC_TIERING);
 
 	/*
 	 * make sure we allocate from the target node first also trying to
