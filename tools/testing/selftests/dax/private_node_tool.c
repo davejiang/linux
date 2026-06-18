@@ -21,6 +21,7 @@
  *   mbindns  <nid> <MB>                      mbind without STATIC_NODES
  *   mbindthp <nid> <MB> [hold_s]             mbind a THP range, hold
  *   mbindmask <MB> <nid>...                  mbind(MPOL_BIND) to a node mask
+ *   collapse <nid> <MB>                      mbind base pages, MADV_COLLAPSE, report THP
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -63,6 +64,15 @@
 #endif
 #ifndef MADV_FREE
 #define MADV_FREE	8
+#endif
+#ifndef MADV_HUGEPAGE
+#define MADV_HUGEPAGE	14
+#endif
+#ifndef MADV_NOHUGEPAGE
+#define MADV_NOHUGEPAGE	15
+#endif
+#ifndef MADV_COLLAPSE
+#define MADV_COLLAPSE	25
 #endif
 #define HP_SIZE		(2UL << 20)
 #define DAXSWAP_MAGIC	0x5741504bUL	/* "SWAP" */
@@ -120,6 +130,34 @@ static long vmstat(const char *name)
 			val = atol(line + nl + 1);
 			break;
 		}
+	fclose(f);
+	return val;
+}
+
+/* Read a named smaps field in kB (e.g. "AnonHugePages") for the mapping
+ * containing @addr; -1 if not found.
+ */
+static long smaps_field(unsigned long addr, const char *field)
+{
+	char line[256];
+	unsigned long start, end;
+	size_t fl = strlen(field);
+	int in = 0;
+	long val = -1;
+	FILE *f = fopen("/proc/self/smaps", "r");
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
+			in = (addr >= start && addr < end);
+			continue;
+		}
+		if (in && !strncmp(line, field, fl) && line[fl] == ':') {
+			val = atol(line + fl + 1);
+			break;
+		}
+	}
 	fclose(f);
 	return val;
 }
@@ -626,6 +664,64 @@ static int do_mbindthp(int nid, long mb, long hold)
 	return 0;
 }
 
+/*
+ * Bind a fresh 2MB-aligned anon range to @nid, fault it as BASE pages
+ * (MADV_NOHUGEPAGE), then MADV_COLLAPSE it.  Reports whether a THP formed
+ * (AnonHugePages) and where it landed.  Exercises khugepaged-style collapse
+ * onto an opted private node: it should succeed only where the node permits it
+ * (CAP_RECLAIM), and the collapsed THP should sit on @nid.
+ */
+static int do_collapse(int nid, long mb)
+{
+	unsigned long mask[MAXNODE / (8 * sizeof(long))], total, on_nid;
+	size_t len = (size_t)mb << 20;
+	long rc, ahp_pre, ahp_post, coll_pre, coll_post;
+	char *base, *p;
+
+	set_bit_node(mask, nid);
+	base = mmap(NULL, len + HP_SIZE, PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (base == MAP_FAILED) {
+		fprintf(stderr, "collapse: mmap: %m\n");
+		return KSFT_SKIP;
+	}
+	p = (char *)(((unsigned long)base + HP_SIZE - 1) & ~(HP_SIZE - 1));
+
+	/* Force plain base pages on fault: no fault-time THP. */
+	if (madvise(p, len, MADV_NOHUGEPAGE))
+		fprintf(stderr, "collapse: madvise(NOHUGEPAGE): %m\n");
+
+	errno = 0;
+	rc = sys_mbind(p, len, MPOL_BIND | MPOL_F_STATIC_NODES, mask, MAXNODE, 0);
+	printf("collapse: mbind(node %d) rc=%ld errno=%d (%s)\n",
+	       nid, rc, errno, rc ? strerror(errno) : "ok");
+	if (rc)
+		return 0;
+
+	for (size_t off = 0; off < len; off += 4096)
+		p[off] = 1;
+	numa_residency((unsigned long)p, nid, &total, &on_nid, NULL);
+	ahp_pre = smaps_field((unsigned long)p, "AnonHugePages");
+	printf("collapse: pre  on_node%d=%lu total=%lu AnonHugePages=%ldkB\n",
+	       nid, on_nid, total, ahp_pre);
+
+	/* Make the range THP-eligible, then collapse synchronously. */
+	if (madvise(p, len, MADV_HUGEPAGE))
+		fprintf(stderr, "collapse: madvise(HUGEPAGE): %m\n");
+	coll_pre = vmstat("thp_collapse_alloc");
+	errno = 0;
+	rc = madvise(p, len, MADV_COLLAPSE);
+	coll_post = vmstat("thp_collapse_alloc");
+	numa_residency((unsigned long)p, nid, &total, &on_nid, NULL);
+	ahp_post = smaps_field((unsigned long)p, "AnonHugePages");
+	printf("collapse: MADV_COLLAPSE rc=%ld errno=%d (%s) thp_collapse_alloc+%ld\n",
+	       rc, errno, rc ? strerror(errno) : "ok", coll_post - coll_pre);
+	printf("collapse: post on_node%d=%lu total=%lu AnonHugePages=%ldkB\n",
+	       nid, on_nid, total, ahp_post);
+	fflush(stdout);
+	return 0;
+}
+
 /* mbind(MPOL_BIND) a fresh anon range to a multi-node mask, fault, report. */
 static int do_mbindmask(long mb, int nnids, char **nidv)
 {
@@ -877,6 +973,8 @@ int main(int argc, char **argv)
 	if (argc >= 4 && !strcmp(argv[1], "mbindthp"))
 		return do_mbindthp(atoi(argv[2]), atol(argv[3]),
 				   argc >= 5 ? atol(argv[4]) : 0);
+	if (argc == 4 && !strcmp(argv[1], "collapse"))
+		return do_collapse(atoi(argv[2]), atol(argv[3]));
 	if (argc >= 4 && !strcmp(argv[1], "mbindmask"))
 		return do_mbindmask(atol(argv[2]), argc - 3, &argv[3]);
 	if (argc == 4 && !strcmp(argv[1], "setmempol"))
@@ -896,7 +994,7 @@ int main(int argc, char **argv)
 		"       daxchurn <daxdev> <MB> [secs] | daxmadv <daxdev> <MB> <pageout|cold|free> |\n"
 		"       daxswap <daxdev> <nid> <MB> [evict_MB] |\n"
 		"       daxcpuset <daxdev> <MB> [pnid] | mbind <nid> <MB> [hold] | mbindns <nid> <MB> [hold] |\n"
-		"       mbindthp <nid> <MB> [hold] | mbindmask <MB> <nid>... |\n"
+		"       mbindthp <nid> <MB> [hold] | mbindmask <MB> <nid>... | collapse <nid> <MB> |\n"
 		"       setmempol <nid> <MB> | sethome <home_nid> <base_nid> <MB> |\n"
 		"       movepages <daxdev> <target_nid> | movepagesto <target_nid>\n",
 		argv[0]);

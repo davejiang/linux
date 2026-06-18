@@ -16,6 +16,7 @@ TEST_PROGS := dax-kmem-hotplug.sh \
 	      private_node_demotion.sh \
 	      private_node_mbind.sh \
 	      private_node_mempolicy.sh \
-	      private_node_user_migrate.sh
+	      private_node_user_migrate.sh \
+	      private_node_thp.sh
 
 include ../lib.mk
