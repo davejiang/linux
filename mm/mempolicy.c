@@ -1174,7 +1174,7 @@ struct mempolicy *mpol_private_bind(int nid)
 	}
 	return pol;
 }
-EXPORT_SYMBOL_FOR_MODULES(mpol_private_bind, "anondax");
+EXPORT_SYMBOL_FOR_MODULES(mpol_private_bind, "anondax,kvm");
 
 /*
  * Return nodemask for policy for get_mempolicy() query
@@ -2163,8 +2163,14 @@ bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone)
 	 * policy->nodes is intersect with node_states[N_MEMORY].
 	 * so if the following test fails, it implies
 	 * policy->nodes has movable memory only.
+	 *
+	 * A private (N_MEMORY_PRIVATE) node is absent from N_HIGH_MEMORY even
+	 * when onlined into a kernel zone, so include it explicitly; otherwise
+	 * a private bind would be treated as movable-only and dropped for any
+	 * non-movable (e.g. GFP_HIGHUSER) allocation.
 	 */
-	if (!nodes_intersects(policy->nodes, node_states[N_HIGH_MEMORY]))
+	if (!nodes_intersects(policy->nodes, node_states[N_HIGH_MEMORY]) &&
+	    !nodes_intersects(policy->nodes, node_states[N_MEMORY_PRIVATE]))
 		dynamic_policy_zone = ZONE_MOVABLE;
 
 	return zone >= dynamic_policy_zone;
@@ -3359,6 +3365,38 @@ int mpol_set_shared_policy(struct shared_policy *sp,
 	return err;
 }
 EXPORT_SYMBOL_FOR_MODULES(mpol_set_shared_policy, "kvm");
+
+/**
+ * mpol_set_shared_policy_all - install @pol over an entire shared policy tree
+ * @sp: the (empty) shared policy to populate
+ * @pol: a fully constructed, validated policy (e.g. from mpol_private_bind())
+ *
+ * Insert @pol as the policy for the whole file ([0, MAX_LFS_FILESIZE]) without
+ * requiring a VMA.  Unlike mpol_shared_policy_init(), the policy is inserted
+ * verbatim (via mpol_dup()), so a private bind (MPOL_F_PRIVATE) is preserved
+ * rather than re-contextualised through the user nodemask - which, for a
+ * private node, would silently drop the node (it is absent from N_MEMORY).
+ *
+ * Must be called on an empty @sp (e.g. straight after mpol_shared_policy_init(
+ * sp, NULL)).  @sp takes its own reference via mpol_dup(); the caller still
+ * owns its reference on @pol and must drop it with mpol_put().
+ *
+ * Return: 0 on success, -ENOMEM on allocation failure.
+ */
+int mpol_set_shared_policy_all(struct shared_policy *sp, struct mempolicy *pol)
+{
+	struct sp_node *sn;
+
+	sn = sp_alloc(0, MAX_LFS_FILESIZE >> PAGE_SHIFT, pol);
+	if (!sn)
+		return -ENOMEM;
+
+	write_lock(&sp->lock);
+	sp_insert(sp, sn);
+	write_unlock(&sp->lock);
+	return 0;
+}
+EXPORT_SYMBOL_FOR_MODULES(mpol_set_shared_policy_all, "kvm");
 
 /* Free a backing policy store on inode delete. */
 void mpol_free_shared_policy(struct shared_policy *sp)
