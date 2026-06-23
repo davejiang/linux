@@ -556,7 +556,7 @@ bool __weak kvm_arch_supports_gmem_init_shared(struct kvm *kvm)
 	return true;
 }
 
-static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags)
+static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags, int node)
 {
 	static const char *name = "[kvm-gmem]";
 	struct gmem_file *f;
@@ -597,6 +597,27 @@ static int __kvm_gmem_create(struct kvm *kvm, loff_t size, u64 flags)
 
 	GMEM_I(inode)->flags = flags;
 
+	if (IS_ENABLED(CONFIG_NUMA) && (flags & GUEST_MEMFD_FLAG_BIND_NODE)) {
+		struct mempolicy *pol;
+
+		/*
+		 * Bind every folio (host- and guest-faulted) to @node by
+		 * installing a private bind on the inode's shared policy.  The
+		 * policy is inserted verbatim so an MPOL_F_PRIVATE node is not
+		 * dropped, unlike the mbind() path which requires the node to
+		 * opt into CAP_MEMPOLICY.
+		 */
+		pol = mpol_private_bind(node);
+		if (IS_ERR(pol)) {
+			err = PTR_ERR(pol);
+			goto err_inode;
+		}
+		err = mpol_set_shared_policy_all(&GMEM_I(inode)->policy, pol);
+		mpol_put(pol);
+		if (err)
+			goto err_inode;
+	}
+
 	file = alloc_file_pseudo(inode, kvm_gmem_mnt, name, O_RDWR, &kvm_gmem_fops);
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
@@ -629,6 +650,7 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args)
 {
 	loff_t size = args->size;
 	u64 flags = args->flags;
+	int node = NUMA_NO_NODE;
 
 	if (flags & ~kvm_gmem_get_supported_flags(kvm))
 		return -EINVAL;
@@ -636,7 +658,25 @@ int kvm_gmem_create(struct kvm *kvm, struct kvm_create_guest_memfd *args)
 	if (size <= 0 || !PAGE_ALIGNED(size))
 		return -EINVAL;
 
-	return __kvm_gmem_create(kvm, size, flags);
+	if (flags & GUEST_MEMFD_FLAG_BIND_NODE) {
+		if (args->pad)
+			return -EINVAL;
+		node = args->node;
+		/*
+		 * The bind only makes sense for a node that can hold memory.
+		 * Accept both ordinary (N_MEMORY) and private (N_MEMORY_PRIVATE)
+		 * nodes; reject offline or memoryless (e.g. CPU-only) nodes here
+		 * rather than letting mpol_private_bind() fail opaquely.
+		 */
+		if (node >= MAX_NUMNODES ||
+		    (!node_state(node, N_MEMORY) &&
+		     !node_state(node, N_MEMORY_PRIVATE)))
+			return -EINVAL;
+	} else if (args->node || args->pad) {
+		return -EINVAL;
+	}
+
+	return __kvm_gmem_create(kvm, size, flags, node);
 }
 
 int kvm_gmem_bind(struct kvm *kvm, struct kvm_memory_slot *slot,
